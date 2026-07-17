@@ -47,7 +47,7 @@ if (-not $NoShortcuts) {
   foreach ($folder in @($desktop, $startMenu)) {
     $shortcut = $shell.CreateShortcut((Join-Path $folder 'Codex Dream Skin.lnk'))
     $shortcut.TargetPath = $powershell
-    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`" -Port $Port -RestartExisting"
+    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`" -Port $Port"
     $shortcut.WorkingDirectory = $SkillRoot
     $shortcut.Description = 'Launch Codex with the Dream Skin theme engine'
     $shortcut.Save()
@@ -70,7 +70,7 @@ if (-not $NoAutoRecover) {
   $watcherShortcut.TargetPath = $powershell
   $watcherShortcut.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchScript`" -Port $Port"
   $watcherShortcut.WorkingDirectory = $SkillRoot
-  $watcherShortcut.Description = 'Automatically restore Codex Dream Skin after a normal Codex restart'
+  $watcherShortcut.Description = 'Repair the injector without restarting an open Codex app'
   $watcherShortcut.Save()
 
   $watcherStatePath = Join-Path $StateRoot 'watcher-state.json'

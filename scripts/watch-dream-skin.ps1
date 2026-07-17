@@ -5,9 +5,7 @@ param(
   [int]$LaunchGraceSeconds = 15,
   [int]$MaxConsecutiveFailures = 3,
   [int]$CooldownMinutes = 30,
-  [int]$ProbeFailuresBeforeRecovery = 3,
-  [int]$MaxRestartsPerWindow = 2,
-  [int]$RestartWindowMinutes = 10
+  [int]$ProbeFailuresBeforeRecovery = 3
 )
 
 $ErrorActionPreference = 'Continue'
@@ -63,7 +61,7 @@ Write-WatcherLog "Watcher started (PID $PID, port $Port)."
 $consecutiveFailures = 0
 $suspendedUntil = $null
 $missedProbes = 0
-$restartTimes = New-Object System.Collections.Generic.List[datetime]
+$unskinnedWindowLogged = $false
 
 try {
   while ($true) {
@@ -76,6 +74,7 @@ try {
       }
       $consecutiveFailures = 0
       $suspendedUntil = $null
+      $unskinnedWindowLogged = $false
       Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
       continue
     }
@@ -124,33 +123,14 @@ try {
       }
       $missedProbes = 0
 
-      # Rate limit: even "successful" recoveries must not loop. If we already restarted
-      # Codex $MaxRestartsPerWindow times inside the window, something is systemically
-      # wrong — suspend instead of restarting again.
-      while ($restartTimes.Count -gt 0 -and $restartTimes[0] -lt (Get-Date).AddMinutes(-$RestartWindowMinutes)) {
-        $restartTimes.RemoveAt(0)
+      # Never restart a normally launched Codex window. Long-running tasks remain intact;
+      # activation waits for the user to close the app on their own schedule.
+      if (-not $unskinnedWindowLogged) {
+        Write-WatcherLog 'Codex is running without Dream Skin. Safety policy leaves it untouched; skin activation waits for a user-controlled close and launch.'
+        $unskinnedWindowLogged = $true
       }
-      if ($restartTimes.Count -ge $MaxRestartsPerWindow) {
-        $suspendedUntil = (Get-Date).AddMinutes($CooldownMinutes)
-        Write-WatcherLog "Restart rate limit hit ($($restartTimes.Count) restarts within $RestartWindowMinutes minutes); auto-recovery suspended until $($suspendedUntil.ToString('yyyy-MM-dd HH:mm:ss')). Codex keeps running; run start-dream-skin.ps1 manually if the skin is missing."
-        Start-Sleep -Seconds ([Math]::Max(1, $PollSeconds))
-        continue
-      }
-
-      Write-WatcherLog 'Detected Codex launched without Dream Skin; restarting it through the skin launcher.'
-      $restartTimes.Add((Get-Date))
-      try {
-        & $StartScript -Port $Port -RestartExisting | Out-Null
-        if (Test-DreamDebugPort) {
-          Write-WatcherLog 'Codex restarted with Dream Skin.'
-        } else {
-          $failed = $true
-          $failureReason = 'the launcher finished but CDP is still unreachable on both loopbacks'
-        }
-      } catch {
-        $failed = $true
-        $failureReason = $_.Exception.Message
-      }
+      Start-Sleep -Seconds ([Math]::Max(5, $PollSeconds))
+      continue
     }
 
     if ($failed) {

@@ -69,6 +69,7 @@ Codex 自己克隆、安装、从图里生成主题：
 - 🖼 **一张图生成主题** — Windows 一条命令 / macOS 双击选图：自动取色、自动判断明暗路线、生成主题、立即生效
 - ⚡ **上手极简** — Windows 两条命令；macOS 双击安装，直接复用 Codex 内置的 Node.js，普通用户零依赖
 - 📁 **主题即文件夹** — 一个 `theme.json` + 一张图就是一个主题，增删主题零改码
+- 🧭 **日常工作态换肤** — 不只美化新建任务页；聊天阅读、任务导航、右侧输出/来源面板、代码块和输入区共享一套可配置材质系统
 - 🤖 **AI 精修（可选）** — 把仓库丢给你的 Codex / Claude，照 [THEME-SPEC.md](THEME-SPEC.md) 深度定制裁剪、文案、贴纸
 - 🔒 **安全可逆** — CDP 仅本机回环注入，不碰 `WindowsApps`、应用 bundle 或 `app.asar`，登录态会话原样保留，一条命令还原
 - 🛡 **稳定守护** — 双栈端口探测、崩溃防抖熔断、装饰层命中测试；Windows 用 Startup watcher、macOS 用 LaunchAgent，重启 Codex 后皮肤自动恢复
@@ -97,7 +98,7 @@ cd codex-autoskin
 2. **双击安装**——打开 `Install AutoSkin on macOS.command`（Codex 在运行时会先询问是否重启）；
 3. **选图生成**——打开 `Create AutoSkin Theme on macOS.command` 选一张 PNG/JPG（或把图直接拖到该文件上），自动取色、生成、应用。
 
-普通安装使用原有 Codex profile，**不会清空项目、任务、聊天记录或登录状态**。提示"无法验证开发者"见 [FAQ](#-faq)。终端党等价命令：
+普通安装使用原有 Codex profile，**不会清空项目、任务、聊天记录或登录状态，也不会改写你当前的 Codex 明暗模式**。提示"无法验证开发者"见 [FAQ](#-faq)。终端党等价命令：
 
 ```bash
 scripts/autoskin-macos.sh install
@@ -158,11 +159,13 @@ scripts/restore-dream-skin.sh                            # macOS 一键还原官
 
 选择自动持久化；也可以直接跟你的 Codex 说"切到极光主题"。
 
+从 v3 起，主题会贯穿你真正长期停留的任务界面。首页仍支持 banner / fullscreen，但它不再是唯一主角：侧栏选中态、任务头部、消息节奏、代码内容、原生面板和聊天输入区都消费 `--dream-work-*` token。现有主题无需修改即可继续使用；要做完整暗色工作台，按 [THEME-SPEC.md §3.8](THEME-SPEC.md#38-v3-日常工作态-token全部有默认值非必需) 覆盖这些 token 即可。
+
 ## 🛠 做自己的主题
 
 **快速**：Windows `quick-theme.ps1` / macOS `quick-theme` 命令（见上），覆盖背景替换 + 基础配色，全屏 / 横幅两种版式。
 
-**进阶**：把仓库和图丢给你的 Codex / Claude，说 **"照着 THEME-SPEC.md 精修 <主题名> 主题"**。[THEME-SPEC.md](THEME-SPEC.md) 是写给 AI agent 读的完整规范——28 个取色 token、四种画面角色的裁剪调参、明暗路线决策树、验收清单，agent 读完即可独立产出并自测交付。内置的 [aurora-veil](themes/aurora-veil/theme.json)（暗图路线）与 [ember-bloom](themes/ember-bloom/theme.json)（亮图路线）即是两份对照样例。
+**进阶**：把仓库和图丢给你的 Codex / Claude，说 **"照着 THEME-SPEC.md 精修 <主题名> 主题"**。[THEME-SPEC.md](THEME-SPEC.md) 是写给 AI agent 读的完整规范——28 个必需视觉 token、可选的日常工作态 token、四种画面角色的裁剪调参、明暗路线决策树、验收清单，agent 读完即可独立产出并自测交付。内置的 [aurora-veil](themes/aurora-veil/theme.json)（暗图路线）与 [ember-bloom](themes/ember-bloom/theme.json)（亮图路线）即是两份对照样例。
 
 ## 🔍 工作原理与安全
 
@@ -171,6 +174,7 @@ scripts/restore-dream-skin.sh                            # macOS 一键还原官
 以 `--remote-debugging-port=9335`（仅本机回环）启动官方 Codex（Windows 的 `ChatGPT.exe` / macOS 的 `ChatGPT.app`，mac 端经 LaunchServices 启动），通过 CDP 向主渲染器注入一段 CSS + JS：
 
 - 不替换、不修改、不重签任何官方文件与应用 bundle，登录态 / 会话 / 插件保持原样
+- 默认保留 `~/.codex/config.toml` 里的原生外观设置；旧版强制浅色粉紫 base theme 仅作为显式 legacy 选项保留
 - 平台对应的 `restore-dream-skin` 脚本现场移除全部注入内容；完整卸载 Windows 加 `-Uninstall -RestoreBaseTheme`，macOS 加 `--uninstall --restore-base-theme`（可安全重复执行）
 - 运行时状态分别位于 `%LOCALAPPDATA%\CodexDreamSkin` 与 `~/Library/Application Support/CodexDreamSkin`，删除即无痕
 - 隐藏 watcher 在 Codex 正常重启后自动补皮肤（防抖 + 频率熔断 + 失败冷却，绝不与应用打架）；macOS 的 LaunchAgent 不会打断安装前已打开的 Codex

@@ -9,7 +9,7 @@
   const INJECTION_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const LAYOUT_STORAGE_KEY = "codex-dream-skin.layout";
   const THEME_STORAGE_KEY = "codex-dream-skin.theme";
-  const STYLE_VERSION = "4";
+  const STYLE_VERSION = "5";
   const LAYOUTS = new Set(["banner", "fullscreen"]);
   // Sidebar "new task" row gets a marker class so the structure CSS can restyle
   // it as a capsule. Text matching only; the real button stays fully native.
@@ -183,6 +183,15 @@
 
     if (!shellMain || !document.body) return;
     shellMain.classList.toggle("dream-home-shell", Boolean(home));
+    shellMain.classList.toggle("dream-work-shell", !home);
+    root.classList.toggle("dream-route-home", Boolean(home));
+    root.classList.toggle("dream-route-work", !home);
+    shellMain.querySelectorAll("header.app-header-tint").forEach((header) => {
+      header.classList.toggle("dream-work-header", !home);
+    });
+    document.querySelectorAll(".composer-surface-chrome").forEach((composer) => {
+      composer.classList.toggle("dream-work-composer", !composer.closest(".dream-home"));
+    });
     document.getElementById(LEGACY_CONTROLS_ID)?.remove();
     let chrome = document.getElementById(CHROME_ID);
     if (!chrome || chrome.parentElement !== document.body || chrome.dataset.dreamInjection !== INJECTION_ID) {
@@ -252,7 +261,7 @@
     const rootElement = document.documentElement;
     if (rootElement) {
       for (const cls of [...rootElement.classList]) {
-        if (cls === "codex-dream-skin" || cls.startsWith("dream-theme-") || cls.startsWith("dream-layout-")) {
+        if (cls === "codex-dream-skin" || cls.startsWith("dream-theme-") || cls.startsWith("dream-layout-") || cls.startsWith("dream-route-")) {
           rootElement.classList.remove(cls);
         }
       }
@@ -262,6 +271,9 @@
     }
     document.querySelectorAll(".dream-home").forEach((node) => node.classList.remove("dream-home"));
     document.querySelectorAll(".dream-home-shell").forEach((node) => node.classList.remove("dream-home-shell"));
+    document.querySelectorAll(".dream-work-shell").forEach((node) => node.classList.remove("dream-work-shell"));
+    document.querySelectorAll(".dream-work-header").forEach((node) => node.classList.remove("dream-work-header"));
+    document.querySelectorAll(".dream-work-composer").forEach((node) => node.classList.remove("dream-work-composer"));
     document.querySelectorAll(".dream-new-task").forEach((node) => node.classList.remove("dream-new-task"));
     document.getElementById(STYLE_ID)?.remove();
     document.getElementById(CHROME_ID)?.remove();
@@ -304,8 +316,8 @@
     setLayout: applyLayout,
     get theme() { return activeTheme; },
     setTheme: applyTheme,
-    version: "2.2.0"
+    version: "3.0.0"
   };
   ensure();
-  return { installed: true, version: "2.2.0", layout: activeLayout, theme: activeTheme, themes: [...THEME_ORDER] };
+  return { installed: true, version: "3.0.0", layout: activeLayout, theme: activeTheme, themes: [...THEME_ORDER] };
 })(__DREAM_CSS_JSON__, __DREAM_ART_ASSETS_JSON__, __DREAM_MANIFEST_JSON__)

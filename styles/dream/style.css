@@ -5,7 +5,7 @@
    themes/<name>/theme.json and themes-private/<name>/theme.json. */
 
 :root.codex-dream-skin {
-  color-scheme: light !important;
+  color-scheme: var(--dream-work-color-scheme, light) !important;
   /* Structural layout tokens (theme-independent; a theme may override them). */
   --dream-hero-copy-width: 54%;
   --dream-hero-split-width: 58%;
@@ -71,6 +71,40 @@
   --dream-chat-art-position: center;
   --dream-chat-art-opacity: .10;
   --dream-chat-wash: rgba(255, 255, 255, .76);
+
+  /* v3 daily-workspace system. These tokens style the screens people actually
+     spend time in: conversations, navigation, inspector panes, code, and the
+     task composer. Existing themes inherit a quiet light fallback; dark themes
+     can replace the whole workspace without a large extra.css file. */
+  --dream-work-color-scheme: light;
+  --dream-work-bg: var(--dream-page-bg-0);
+  --dream-work-bg-raised: color-mix(in srgb, var(--dream-page-bg-0) 88%, var(--dream-page-bg-1));
+  --dream-work-sidebar: color-mix(in srgb, var(--dream-page-bg-0) 94%, var(--dream-pink) 6%);
+  --dream-work-surface-1: color-mix(in srgb, var(--dream-page-bg-0) 96%, var(--dream-purple) 4%);
+  --dream-work-surface-2: color-mix(in srgb, var(--dream-page-bg-0) 90%, var(--dream-pink) 10%);
+  --dream-work-surface-3: color-mix(in srgb, var(--dream-page-bg-1) 82%, var(--dream-purple) 18%);
+  --dream-work-text: var(--dream-ink);
+  --dream-work-text-muted: color-mix(in srgb, var(--dream-ink) 62%, var(--dream-page-bg-0));
+  --dream-work-accent: var(--dream-purple);
+  --dream-work-accent-strong: var(--dream-violet);
+  --dream-work-accent-warm: var(--dream-pink);
+  --dream-work-accent-soft: color-mix(in srgb, var(--dream-pink) 16%, transparent);
+  --dream-work-border: color-mix(in srgb, var(--dream-ink) 14%, transparent);
+  --dream-work-border-strong: color-mix(in srgb, var(--dream-purple) 32%, transparent);
+  --dream-work-user-bg: var(--dream-work-surface-2);
+  --dream-work-assistant-bg: transparent;
+  --dream-work-code-bg: color-mix(in srgb, var(--dream-ink) 92%, #000000);
+  --dream-work-code-text: color-mix(in srgb, var(--dream-page-bg-0) 92%, var(--dream-pink));
+  --dream-work-code-border: color-mix(in srgb, var(--dream-purple) 38%, transparent);
+  --dream-work-focus: color-mix(in srgb, var(--dream-work-accent-warm) 72%, #ffffff);
+  --dream-work-selection: color-mix(in srgb, var(--dream-work-accent) 28%, transparent);
+  --dream-work-art-wash: linear-gradient(90deg, color-mix(in srgb, var(--dream-work-bg) 96%, transparent) 0%, color-mix(in srgb, var(--dream-work-bg) 90%, transparent) 54%, color-mix(in srgb, var(--dream-work-bg) 78%, transparent) 100%);
+  --dream-work-shadow: 0 18px 48px color-mix(in srgb, var(--dream-ink) 14%, transparent);
+  --dream-work-radius-sm: 8px;
+  --dream-work-radius-md: 12px;
+  --dream-work-radius-lg: 18px;
+  --dream-work-font: "Source Han Sans SC", "Microsoft YaHei UI", sans-serif;
+  --dream-work-code-font: "Cascadia Code", "JetBrains Mono", monospace;
 }
 
 html.codex-dream-skin body {
@@ -1055,6 +1089,317 @@ html.codex-dream-skin .composer-surface-chrome button[aria-label="Add files and 
 html.codex-dream-skin article,
 html.codex-dream-skin [data-message-author-role] {
   border-radius: 20px;
+}
+
+/* -------------------------------------------------------------------------
+   v3 daily workspace
+
+   The old skin concentrated its craft on the new-task route. The selectors
+   below deliberately prioritize the persistent work state while keeping the
+   DOM native and interactive. Route marker classes are maintained by
+   assets/renderer-inject.js so home art and work surfaces do not fight.
+   ------------------------------------------------------------------------- */
+
+html.codex-dream-skin,
+html.codex-dream-skin body {
+  accent-color: var(--dream-work-accent-warm);
+}
+
+html.codex-dream-skin body {
+  color: var(--dream-work-text) !important;
+  font-family: var(--dream-work-font) !important;
+}
+
+html.codex-dream-skin.dream-route-work body::before {
+  opacity: 0;
+}
+
+html.codex-dream-skin ::selection {
+  color: var(--dream-work-text);
+  background: var(--dream-work-selection);
+}
+
+/* Navigation is a calm material layer, not a separate pink toy. */
+html.codex-dream-skin aside.app-shell-left-panel {
+  background: var(--dream-work-sidebar) !important;
+  border-color: var(--dream-work-border) !important;
+  border-radius: 0 !important;
+  box-shadow: inset -1px 0 var(--dream-work-border) !important;
+  color: var(--dream-work-text) !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel button {
+  color: var(--dream-work-text-muted) !important;
+  border-radius: var(--dream-work-radius-sm) !important;
+  transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel button:hover {
+  color: var(--dream-work-text) !important;
+  background: var(--dream-work-accent-soft) !important;
+  box-shadow: inset 2px 0 var(--dream-work-accent-warm) !important;
+  transform: translateX(1px);
+}
+
+html.codex-dream-skin aside.app-shell-left-panel [class~="bg-token-list-hover-background"],
+html.codex-dream-skin aside.app-shell-left-panel [aria-current="page"] {
+  color: var(--dream-work-text) !important;
+  background: var(--dream-work-surface-3) !important;
+  border: 1px solid var(--dream-work-border-strong) !important;
+  box-shadow: inset 3px 0 var(--dream-work-accent-warm), 0 7px 20px color-mix(in srgb, var(--dream-work-bg) 38%, transparent) !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel button.dream-new-task {
+  color: var(--dream-work-text) !important;
+  background: var(--dream-work-surface-2) !important;
+  border: 1px solid var(--dream-work-border-strong) !important;
+  border-radius: var(--dream-work-radius-md) !important;
+  box-shadow: inset 3px 0 var(--dream-work-accent-warm) !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel button.dream-new-task:hover {
+  background: var(--dream-work-surface-3) !important;
+  box-shadow: inset 3px 0 var(--dream-work-accent-warm), 0 8px 22px color-mix(in srgb, var(--dream-work-bg) 50%, transparent) !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel [class~="group/nav-section-title"] {
+  border-top: 1px solid var(--dream-work-border) !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel [class~="group/nav-section-title"] [class~="group/section-toggle"] {
+  color: var(--dream-work-text-muted) !important;
+  font-size: 11px !important;
+  font-weight: 680 !important;
+  letter-spacing: .08em !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel button[aria-label="打开个人资料菜单"],
+html.codex-dream-skin aside.app-shell-left-panel button[aria-label="Open profile menu"] {
+  border: 1px solid var(--dream-work-border) !important;
+  border-radius: var(--dream-work-radius-md) !important;
+  background: var(--dream-work-surface-1) !important;
+  box-shadow: none !important;
+}
+
+html.codex-dream-skin aside.app-shell-left-panel button[aria-label="打开个人资料菜单"]::after,
+html.codex-dream-skin aside.app-shell-left-panel button[aria-label="Open profile menu"]::after {
+  content: "";
+  right: 9px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dream-work-accent-warm);
+  box-shadow: 0 0 0 3px var(--dream-work-accent-soft);
+  transform: translateY(-50%);
+}
+
+/* The persistent task surface gets a full material system. */
+html.codex-dream-skin main.main-surface.dream-work-shell {
+  color: var(--dream-work-text) !important;
+  background: var(--dream-work-bg) !important;
+  border-color: var(--dream-work-border) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+html.codex-dream-skin main.main-surface.dream-work-shell::before {
+  opacity: var(--dream-chat-art-opacity);
+  filter: saturate(.72) contrast(.92) brightness(.78);
+  mix-blend-mode: luminosity;
+}
+
+html.codex-dream-skin main.main-surface.dream-work-shell::after {
+  background: var(--dream-work-art-wash) !important;
+}
+
+html.codex-dream-skin main.main-surface.dream-work-shell > header.app-header-tint,
+html.codex-dream-skin main.main-surface.dream-work-shell > header.dream-work-header {
+  color: var(--dream-work-text) !important;
+  background: color-mix(in srgb, var(--dream-work-bg-raised) 88%, transparent) !important;
+  border-bottom: 1px solid var(--dream-work-border) !important;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dream-work-bg) 34%, transparent) !important;
+  backdrop-filter: blur(18px) saturate(.88) !important;
+}
+
+/* Native surface tokens are recolored only inside the work route. This catches
+   inspector/source/output panes and task cards without replacing their DOM. */
+html.codex-dream-skin main.dream-work-shell :where(
+  [class~="bg-token-main-surface-primary"],
+  [class~="bg-token-main-surface-secondary"],
+  [class~="bg-token-sidebar-surface-primary"],
+  [class~="bg-token-sidebar-surface-secondary"]
+) {
+  background-color: var(--dream-work-surface-1) !important;
+  border-color: var(--dream-work-border) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell :where(
+  [class~="text-token-text-primary"],
+  [class~="text-token-foreground"]
+) {
+  color: var(--dream-work-text) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell :where(
+  [class~="text-token-text-secondary"],
+  [class~="text-token-text-tertiary"]
+) {
+  color: var(--dream-work-text-muted) !important;
+}
+
+/* Reading rhythm: assistant output stays editorial and flat; the user's prompt
+   becomes the single raised card, so long threads keep a clear cadence. */
+html.codex-dream-skin main.dream-work-shell [data-message-author-role="assistant"] {
+  color: var(--dream-work-text) !important;
+  background: var(--dream-work-assistant-bg) !important;
+  line-height: 1.72 !important;
+}
+
+html.codex-dream-skin main.dream-work-shell [data-message-author-role="user"] {
+  color: var(--dream-work-text) !important;
+  background: var(--dream-work-user-bg) !important;
+  border: 1px solid var(--dream-work-border) !important;
+  border-left: 3px solid var(--dream-work-accent-warm) !important;
+  border-radius: var(--dream-work-radius-lg) !important;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--dream-work-bg) 48%, transparent) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell article :where(p, li) {
+  line-height: 1.72;
+}
+
+html.codex-dream-skin main.dream-work-shell article :where(h1, h2, h3, h4) {
+  color: var(--dream-work-text) !important;
+  letter-spacing: -.015em;
+}
+
+html.codex-dream-skin main.dream-work-shell article a {
+  color: var(--dream-work-accent-warm) !important;
+  text-decoration-color: color-mix(in srgb, var(--dream-work-accent-warm) 45%, transparent) !important;
+  text-underline-offset: 3px;
+}
+
+html.codex-dream-skin main.dream-work-shell article blockquote {
+  color: var(--dream-work-text-muted) !important;
+  border-left: 2px solid var(--dream-work-accent-warm) !important;
+  background: var(--dream-work-accent-soft) !important;
+  border-radius: 0 var(--dream-work-radius-sm) var(--dream-work-radius-sm) 0;
+}
+
+html.codex-dream-skin main.dream-work-shell article :not(pre) > code {
+  color: var(--dream-work-accent-warm) !important;
+  background: var(--dream-work-surface-2) !important;
+  border: 1px solid var(--dream-work-border) !important;
+  border-radius: 5px;
+  padding: .12em .36em;
+  font-family: var(--dream-work-code-font) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell article pre {
+  color: var(--dream-work-code-text) !important;
+  background: var(--dream-work-code-bg) !important;
+  border: 1px solid var(--dream-work-code-border) !important;
+  border-radius: var(--dream-work-radius-md) !important;
+  box-shadow: inset 0 1px color-mix(in srgb, var(--dream-work-code-text) 8%, transparent), 0 12px 32px color-mix(in srgb, var(--dream-work-bg) 42%, transparent) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell article pre code {
+  color: inherit !important;
+  font-family: var(--dream-work-code-font) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell article :where(table, details) {
+  color: var(--dream-work-text) !important;
+  background: var(--dream-work-surface-1) !important;
+  border-color: var(--dream-work-border) !important;
+  border-radius: var(--dream-work-radius-md);
+}
+
+html.codex-dream-skin main.dream-work-shell article :where(th, td) {
+  border-color: var(--dream-work-border) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell article th {
+  color: var(--dream-work-text-muted) !important;
+  background: var(--dream-work-surface-2) !important;
+}
+
+/* The composer is the daily anchor: restrained, tactile, and visibly focused. */
+html.codex-dream-skin main.dream-work-shell .composer-surface-chrome {
+  color: var(--dream-work-text) !important;
+  background: color-mix(in srgb, var(--dream-work-surface-2) 94%, transparent) !important;
+  border: 1px solid var(--dream-work-border-strong) !important;
+  border-radius: var(--dream-work-radius-lg) !important;
+  box-shadow: var(--dream-work-shadow), inset 0 1px color-mix(in srgb, var(--dream-work-text) 7%, transparent) !important;
+  backdrop-filter: blur(20px) saturate(.82) !important;
+  overflow: visible !important;
+}
+
+html.codex-dream-skin main.dream-work-shell .composer-surface-chrome:focus-within {
+  border-color: var(--dream-work-focus) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dream-work-focus) 14%, transparent), var(--dream-work-shadow) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell .composer-surface-chrome::before {
+  content: "";
+  left: 22px;
+  top: -1px;
+  width: 76px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--dream-work-accent), var(--dream-work-accent-warm));
+  box-shadow: 0 0 12px var(--dream-work-accent-soft);
+}
+
+html.codex-dream-skin main.dream-work-shell .ProseMirror {
+  color: var(--dream-work-text) !important;
+  caret-color: var(--dream-work-focus) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell .ProseMirror p[data-placeholder]::after {
+  color: var(--dream-work-text-muted) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell .composer-surface-chrome button[class~="size-token-button-composer"] {
+  color: var(--dream-work-bg) !important;
+  background: var(--dream-work-accent-warm) !important;
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--dream-work-accent-warm) 30%, transparent) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell button[class~="bg-token-foreground"] {
+  color: var(--dream-work-bg) !important;
+  background: var(--dream-work-accent-warm) !important;
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--dream-work-accent-warm) 28%, transparent) !important;
+}
+
+html.codex-dream-skin main.dream-work-shell .composer-surface-chrome button[aria-label="添加文件等内容"],
+html.codex-dream-skin main.dream-work-shell .composer-surface-chrome button[aria-label="Add files and more"] {
+  color: var(--dream-work-text-muted) !important;
+  background: var(--dream-work-surface-1) !important;
+  border-color: var(--dream-work-border) !important;
+}
+
+html.codex-dream-skin :where(*::-webkit-scrollbar) {
+  width: 10px;
+  height: 10px;
+}
+
+html.codex-dream-skin :where(*::-webkit-scrollbar-track) {
+  background: transparent;
+}
+
+html.codex-dream-skin :where(*::-webkit-scrollbar-thumb) {
+  background: color-mix(in srgb, var(--dream-work-text-muted) 34%, transparent);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+html.codex-dream-skin :where(*::-webkit-scrollbar-thumb:hover) {
+  background: color-mix(in srgb, var(--dream-work-accent-warm) 54%, transparent);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
 @media (max-width: 1400px) {

@@ -161,6 +161,37 @@ themes/<name>/            # 公开主题；本地私用放 themes-private/<name>
 | `--dream-sticker-bubble-top` / `--dream-sticker-bubble-right` | 气泡位置（相对主区域） | `19%` / `19%` |
 | `--dream-sticker-board-top` / `--dream-sticker-board-right` / `--dream-sticker-board-width` | 推广牌位置与宽度 | `29%` / `2.6%` / `186px` |
 
+### 3.8 v3 日常工作态 token（全部有默认值，非必需）
+
+这些变量控制用户真正长期停留的界面：聊天阅读、左侧任务导航、任务头部、右侧输出/来源面板、代码块和聊天输入区。旧主题不写任何一项也会继承安静的浅色 fallback；完整暗色主题应优先覆盖本节变量，而不是在 `extra.css` 中复制整套结构选择器。
+
+| token | 控制什么 | 建议 |
+|---|---|---|
+| `--dream-work-color-scheme` | 原生表单/滚动条的明暗提示 | `light` 或 `dark` |
+| `--dream-work-bg` | 长对话主画布 | 暗色主题用接近黑但非纯黑的暖中性色 |
+| `--dream-work-bg-raised` | 任务头部等浮起层 | 与主画布亮度差约 3%~6% |
+| `--dream-work-sidebar` | 左侧导航背景 | 可与主画布同色系，亮度差约 2%~4% |
+| `--dream-work-surface-1` | 输出/来源面板、表格、一般卡片 | 第一层实体表面 |
+| `--dream-work-surface-2` | 输入框、用户消息、强调卡片 | 第二层实体表面 |
+| `--dream-work-surface-3` | 当前任务、悬浮/选中态 | 第三层实体表面，不要过亮 |
+| `--dream-work-text` | 正文/标题 | 暗色主题避免纯白，可用暖奶油色 |
+| `--dream-work-text-muted` | 次级标签、占位文案 | 正文对比度的约 60%~72% |
+| `--dream-work-accent` | 导航和结构信号 | 低频使用，承担品牌识别 |
+| `--dream-work-accent-strong` | 较强强调 | 与 accent 同族，供主题扩展使用 |
+| `--dream-work-accent-warm` | 发送、焦点、链接、用户消息左线 | 全界面最亮的操作色，必须通过对比度检查 |
+| `--dream-work-accent-soft` | hover、引用和焦点光晕 | accent 的 8%~18% 透明底 |
+| `--dream-work-border` / `--dream-work-border-strong` | 普通/强调描边 | 暗色主题通常分别为白色 8%~14% / 品牌色 24%~40% |
+| `--dream-work-user-bg` | 用户消息卡片 | 与主画布明确分层，但不要比代码块更抢眼 |
+| `--dream-work-assistant-bg` | 助手消息背景 | 默认透明，保持长文的编辑阅读感 |
+| `--dream-work-code-bg` / `--dream-work-code-text` / `--dream-work-code-border` | 代码块 | 代码底色应是全界面最深表面之一 |
+| `--dream-work-focus` / `--dream-work-selection` | 键盘焦点与文本选区 | 需要在明暗背景上都能辨认 |
+| `--dream-work-art-wash` | 聊天背景图上的整层遮罩 | 可填纯色或渐变；目标是让真实文字绝对主导 |
+| `--dream-work-shadow` | 聊天输入框主阴影 | 暗色主题避免大面积发光，保持落地感 |
+| `--dream-work-radius-sm/md/lg` | 控件、面板、消息/输入框圆角层级 | 推荐 8 / 12 / 18px，不要所有元素同一圆角 |
+| `--dream-work-font` / `--dream-work-code-font` | UI/正文与代码字体栈 | 不引入联网字体依赖；优先本机稳定字体 |
+
+日常工作态有一条视觉铁律：**assistant 长文保持平、user prompt 才抬起**。如果把每条消息、每个工具调用和每段输出都做成厚重卡片，长对话会变成一摞塑料盒，主题越强，工作越累。
+
 ## 4. crop 调参：size/position 的语义与迭代流程
 
 四个 art 角色本质都是 `background-size` + `background-position`：
@@ -280,7 +311,7 @@ banner 版式对 B 类图同样适用 B1（超大 H% 取特写横带）；hero �
    - 两种版式下：hero/画布、4 张原生建议卡、真实项目选择器、原生输入框全部可见，无横向滚动、无遮挡；
    - 放大检查四角与接缝：**无原图文字鬼影、无原图边框线**；
    - 标题/副标题/chip 在 overlay 上对比度充足。
-3. 打开一个真实任务（聊天页）：chat 背景隐约可见即可，消息文字对比度不受影响，无可读的假 UI。
+3. 打开一个真实任务（聊天页）：chat 背景隐约可见即可，消息文字对比度不受影响，无可读的假 UI；侧栏、任务头部、原生输出/来源面板、代码块和输入区均消费同一套 `--dream-work-*` 材质 token。
 4. 交互回归：点一张建议卡、点项目选择器、在输入框打字 —— 全部正常响应（装饰层没有吃掉点击）。
    用 `document.elementsFromPoint(控件中心)` 验证侧栏"新建任务"、账号按钮、四张卡片、输入框、发送按钮
    最顶命中都是控件真身（贴纸/卡片装饰全部 `pointer-events: none`）。

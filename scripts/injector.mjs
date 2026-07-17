@@ -563,13 +563,16 @@ async function removeFromSession(session) {
       rootElement.style.removeProperty('--dream-home-art');
       rootElement.style.removeProperty('--dream-chat-art');
       for (const cls of [...rootElement.classList]) {
-        if (cls === 'codex-dream-skin' || cls.startsWith('dream-theme-') || cls.startsWith('dream-layout-')) {
+        if (cls === 'codex-dream-skin' || cls.startsWith('dream-theme-') || cls.startsWith('dream-layout-') || cls.startsWith('dream-route-')) {
           rootElement.classList.remove(cls);
         }
       }
     }
     document.querySelectorAll('.dream-home').forEach((node) => node.classList.remove('dream-home'));
     document.querySelectorAll('.dream-home-shell').forEach((node) => node.classList.remove('dream-home-shell'));
+    document.querySelectorAll('.dream-work-shell').forEach((node) => node.classList.remove('dream-work-shell'));
+    document.querySelectorAll('.dream-work-header').forEach((node) => node.classList.remove('dream-work-header'));
+    document.querySelectorAll('.dream-work-composer').forEach((node) => node.classList.remove('dream-work-composer'));
     document.querySelectorAll('.dream-new-task').forEach((node) => node.classList.remove('dream-new-task'));
     document.getElementById('codex-dream-skin-style')?.remove();
     document.getElementById('codex-dream-skin-chrome')?.remove();

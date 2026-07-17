@@ -21,6 +21,7 @@ Usage:
 Install options:
   --restart-existing   Restart an already-open Codex after confirmation is skipped.
   --no-auto-recover    Do not install the LaunchAgent watcher.
+  --apply-legacy-base-theme  Apply the old forced light/purple base configuration.
   --no-start           Install only; do not launch the skin.
   --port PORT          Use a port other than 9335.
   --app PATH           Use a non-standard ChatGPT.app / Codex.app path.
@@ -44,6 +45,7 @@ case "$COMMAND" in
     NODE_PATH=""
     RESTART_EXISTING=0
     NO_AUTO_RECOVER=0
+    APPLY_LEGACY_BASE_THEME=0
     NO_START=0
     while [ "$#" -gt 0 ]; do
       case "$1" in
@@ -52,6 +54,7 @@ case "$COMMAND" in
         --node) [ "$#" -ge 2 ] || dream_die "--node requires a value"; NODE_PATH="$2"; shift 2 ;;
         --restart-existing) RESTART_EXISTING=1; shift ;;
         --no-auto-recover) NO_AUTO_RECOVER=1; shift ;;
+        --apply-legacy-base-theme) APPLY_LEGACY_BASE_THEME=1; shift ;;
         --no-start) NO_START=1; shift ;;
         *) dream_die "unknown install option: $1" ;;
       esac
@@ -64,6 +67,7 @@ case "$COMMAND" in
 
     INSTALL_ARGS=(--port "$PORT" --app "$APP_BUNDLE" --node "$NODE_BIN")
     [ "$NO_AUTO_RECOVER" -ne 1 ] || INSTALL_ARGS+=(--no-auto-recover)
+    [ "$APPLY_LEGACY_BASE_THEME" -ne 1 ] || INSTALL_ARGS+=(--apply-legacy-base-theme)
     "$SCRIPT_DIR/install-dream-skin.sh" "${INSTALL_ARGS[@]}"
     INSTALLED_SCRIPT="$(dream_state_root)/runtime/scripts/autoskin-macos.sh"
 

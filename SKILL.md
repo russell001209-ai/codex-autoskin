@@ -1,6 +1,6 @@
 ---
 name: codex-autoskin
-version: 2.0.0
+version: 3.0.0
 description: Apply, launch, verify, theme-switch, repair, update, or restore a full decorative skin for the Windows or macOS Codex desktop app. Use when the user asks for a Codex theme beyond official color settings, wants a custom image turned into a skin theme, needs the skin reapplied after a Codex update, or needs a safe rollback without modifying the official app or app.asar.
 ---
 
@@ -18,7 +18,7 @@ Themes are data, not code: the injector scans `themes/` and `themes-private/` fo
 4. Switch themes/layouts programmatically: `node scripts/set-theme.mjs <theme> [banner|fullscreen]` (or `--list`). There is intentionally no on-screen switch UI; the choice persists via localStorage and survives reloads and watcher-recovered restarts.
 5. On macOS, turn a PNG/JPG into a private theme with `scripts/autoskin-macos.sh quick-theme <image> [--name name] [--layout fullscreen|banner]`. It uses built-in `sips` sampling, writes the same 28-token schema as Windows quick-theme, reloads the injector, and applies the theme when AutoSkin is already active.
 6. Inspect the screenshot against `references/qa-inventory.md`. Verify every scanned theme in both home layouts before signing off; `node scripts/injector.mjs --themes` lists what was scanned.
-7. Run the platform `restore-dream-skin` script for live removal. Add `-Uninstall -RestoreBaseTheme` on Windows or `--uninstall --restore-base-theme` on macOS for a full uninstall with pre-install colors restored.
+7. Run the platform `restore-dream-skin` script for live removal. v3 preserves the user's native Codex appearance by default; base-theme restoration is only relevant when the legacy override was explicitly enabled during install.
 
 ## Guardrails
 

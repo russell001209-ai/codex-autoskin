@@ -2,37 +2,40 @@
 param(
   [int]$Port = 9335,
   [switch]$NoShortcuts,
-  [switch]$NoAutoRecover
+  [switch]$NoAutoRecover,
+  [switch]$ApplyLegacyBaseTheme
 )
 
 $ErrorActionPreference = 'Stop'
 $SkillRoot = Split-Path -Parent $PSScriptRoot
 $StateRoot = Join-Path $env:LOCALAPPDATA 'CodexDreamSkin'
 New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
-$ConfigPath = Join-Path $HOME '.codex\config.toml'
-$BackupPath = Join-Path $StateRoot 'config.before-dream-skin.toml'
-if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Codex config not found: $ConfigPath" }
-if (-not (Test-Path -LiteralPath $BackupPath)) { Copy-Item -LiteralPath $ConfigPath -Destination $BackupPath }
+if ($ApplyLegacyBaseTheme) {
+  $ConfigPath = Join-Path $HOME '.codex\config.toml'
+  $BackupPath = Join-Path $StateRoot 'config.before-dream-skin.toml'
+  if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Codex config not found: $ConfigPath" }
+  if (-not (Test-Path -LiteralPath $BackupPath)) { Copy-Item -LiteralPath $ConfigPath -Destination $BackupPath }
 
-$content = Get-Content -LiteralPath $ConfigPath -Raw
-$desktopMatch = [regex]::Match($content, '(?ms)^\[desktop\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
-if (-not $desktopMatch.Success) {
-  $content = $content.TrimEnd() + "`r`n`r`n[desktop]`r`n"
+  $content = Get-Content -LiteralPath $ConfigPath -Raw
   $desktopMatch = [regex]::Match($content, '(?ms)^\[desktop\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
+  if (-not $desktopMatch.Success) {
+    $content = $content.TrimEnd() + "`r`n`r`n[desktop]`r`n"
+    $desktopMatch = [regex]::Match($content, '(?ms)^\[desktop\]\s*\r?\n(?<body>.*?)(?=^\[|\z)')
+  }
+  $body = $desktopMatch.Groups['body'].Value
+  $settings = [ordered]@{
+    appearanceTheme = 'appearanceTheme = "light"'
+    appearanceLightCodeThemeId = 'appearanceLightCodeThemeId = "codex"'
+    appearanceLightChromeTheme = 'appearanceLightChromeTheme = { accent = "#B65CFF", contrast = 64, fonts = { code = "Cascadia Code", ui = "Microsoft YaHei UI" }, ink = "#4A235F", opaqueWindows = true, semanticColors = { diffAdded = "#BCE8CF", diffRemoved = "#F7B8CE", skill = "#C47BFF" }, surface = "#FFF4FA" }'
+  }
+  foreach ($key in $settings.Keys) {
+    $pattern = "(?m)^$([regex]::Escape($key))\s*=.*$"
+    if ([regex]::IsMatch($body, $pattern)) { $body = [regex]::Replace($body, $pattern, $settings[$key]) }
+    else { $body = $body.TrimEnd() + "`r`n" + $settings[$key] + "`r`n" }
+  }
+  $content = $content.Substring(0, $desktopMatch.Groups['body'].Index) + $body + $content.Substring($desktopMatch.Groups['body'].Index + $desktopMatch.Groups['body'].Length)
+  Set-Content -LiteralPath $ConfigPath -Value $content -Encoding utf8
 }
-$body = $desktopMatch.Groups['body'].Value
-$settings = [ordered]@{
-  appearanceTheme = 'appearanceTheme = "light"'
-  appearanceLightCodeThemeId = 'appearanceLightCodeThemeId = "codex"'
-  appearanceLightChromeTheme = 'appearanceLightChromeTheme = { accent = "#B65CFF", contrast = 64, fonts = { code = "Cascadia Code", ui = "Microsoft YaHei UI" }, ink = "#4A235F", opaqueWindows = true, semanticColors = { diffAdded = "#BCE8CF", diffRemoved = "#F7B8CE", skill = "#C47BFF" }, surface = "#FFF4FA" }'
-}
-foreach ($key in $settings.Keys) {
-  $pattern = "(?m)^$([regex]::Escape($key))\s*=.*$"
-  if ([regex]::IsMatch($body, $pattern)) { $body = [regex]::Replace($body, $pattern, $settings[$key]) }
-  else { $body = $body.TrimEnd() + "`r`n" + $settings[$key] + "`r`n" }
-}
-$content = $content.Substring(0, $desktopMatch.Groups['body'].Index) + $body + $content.Substring($desktopMatch.Groups['body'].Index + $desktopMatch.Groups['body'].Length)
-Set-Content -LiteralPath $ConfigPath -Value $content -Encoding utf8
 
 if (-not $NoShortcuts) {
   $shell = New-Object -ComObject WScript.Shell
@@ -84,4 +87,5 @@ if (-not $NoAutoRecover) {
   )
 }
 
-Write-Host 'Codex Dream Skin installed. Normal Codex restarts will now recover the skin automatically.'
+Write-Host 'Codex Dream Skin installed. Your existing Codex appearance setting was preserved.'
+if ($ApplyLegacyBaseTheme) { Write-Host 'Legacy light base-theme override was explicitly enabled.' }

@@ -9,7 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  contracts:
+    name: Cross-platform contracts
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate workspace, actor routing, and theme CSS safety
+        run: |
+          node tests/test-workspace-theme.mjs
+          node tests/test-renderer-routing.mjs
+          node tests/test-theme-css-safety.mjs
+
   test:
+    name: macOS integration
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

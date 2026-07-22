@@ -5,6 +5,20 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 
+async function isSameFilePath(first, second, platform = process.platform) {
+  const canonicalize = async (value) => {
+    try {
+      return await fs.realpath(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  const [left, right] = await Promise.all([canonicalize(first), canonicalize(second)]);
+  return platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
 function parseArgs(argv) {
   const options = { port: 9335, mode: "watch", timeoutMs: 30000, screenshot: null, reload: false };
   for (let i = 0; i < argv.length; i += 1) {
@@ -310,17 +324,105 @@ function normalizeStickers(name, config) {
   return Object.keys(result).length ? result : null;
 }
 
+// v3.1 optional work-route actor. The runtime owns all geometry and motion;
+// themes only provide local image assets plus bounded timing/size hints. This
+// keeps character art out of full-shell pseudo-elements, where it could cover
+// native controls or text.
+function normalizeActor(name, config) {
+  if (config === undefined) return null;
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    warn(`theme "${name}": "actor" must be an object; field ignored`);
+    return null;
+  }
+  const files = Array.isArray(config.assets) ? config.assets : [config.art].filter(Boolean);
+  if (!files.length || files.length > 4 || files.some((file) =>
+    typeof file !== "string" || !ART_FILE_PATTERN.test(file)
+  )) {
+    warn(`theme "${name}": actor.assets must contain 1-4 plain png/jpg/webp filenames; field ignored`);
+    return null;
+  }
+  const uniqueFiles = [...new Set(files)];
+  const allowedBehaviors = new Set(["run", "peek", "rest"]);
+  const behaviors = config.behaviors === undefined
+    ? uniqueFiles.map(() => "run")
+    : config.behaviors;
+  if (!Array.isArray(behaviors) || behaviors.length !== uniqueFiles.length || behaviors.some((value) => !allowedBehaviors.has(value))) {
+    warn(`theme "${name}": actor.behaviors must align with actor.assets and use run/peek/rest; field ignored`);
+    return null;
+  }
+  const allowedEntries = new Set(["upper-left", "upper-right", "middle-left", "lower-right"]);
+  const defaultEntries = ["upper-left", "upper-right", "middle-left", "lower-right"];
+  const entries = config.entries === undefined
+    ? uniqueFiles.map((_, index) => defaultEntries[index % defaultEntries.length])
+    : config.entries;
+  if (!Array.isArray(entries) || entries.length !== uniqueFiles.length || entries.some((value) => !allowedEntries.has(value))) {
+    warn(`theme "${name}": actor.entries must align with actor.assets and use one of the four safe entry names; field ignored`);
+    return null;
+  }
+  const bounds = config.bounds === undefined
+    ? uniqueFiles.map(() => [0, 0, 1, 1])
+    : config.bounds;
+  const validBounds = Array.isArray(bounds) && bounds.length === uniqueFiles.length && bounds.every((box) =>
+    Array.isArray(box) && box.length === 4 && box.every(Number.isFinite) &&
+    box[0] >= 0 && box[1] >= 0 && box[2] <= 1 && box[3] <= 1 &&
+    box[0] < box[2] && box[1] < box[3]
+  );
+  if (!validBounds) {
+    warn(`theme "${name}": actor.bounds must align with actor.assets and contain normalized [left, top, right, bottom] boxes; field ignored`);
+    return null;
+  }
+  const width = Number(config.width ?? 88);
+  const durationMs = Number(config.durationMs ?? 2200);
+  const delayMs = Number(config.delayMs ?? 12000);
+  if (!Number.isInteger(width) || width < 64 || width > 104) {
+    warn(`theme "${name}": actor.width must be an integer from 64 to 104; field ignored`);
+    return null;
+  }
+  if (!Number.isInteger(durationMs) || durationMs < 1400 || durationMs > 8000) {
+    warn(`theme "${name}": actor.durationMs must be an integer from 1400 to 8000; field ignored`);
+    return null;
+  }
+  if (!Number.isInteger(delayMs) || delayMs < 2500 || delayMs > 30000) {
+    warn(`theme "${name}": actor.delayMs must be an integer from 2500 to 30000; field ignored`);
+    return null;
+  }
+  return {
+    files: uniqueFiles,
+    width,
+    durationMs,
+    delayMs,
+    behaviors: [...behaviors],
+    entries: [...entries],
+    bounds: bounds.map((box) => [...box]),
+  };
+}
+
 const MIME_BY_EXT = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
 
-// Split a CSS block body into top-level rules ({prelude, body}) without parsing
-// the full grammar. Comments must already be stripped.
+// Split a CSS block body into top-level rules ({prelude, body}) without pulling
+// a CSS parser into the dependency-free injector. The scanners below understand
+// strings and nested function/attribute punctuation and fail closed on malformed
+// input. They are deliberately conservative: extra.css is an escape hatch, not
+// a second structure layer.
 function extractTopLevelRules(css) {
   const rules = [];
   let depth = 0;
   let preludeStart = 0;
   let bodyStart = -1;
+  let quote = null;
+  let escaped = false;
   for (let i = 0; i < css.length; i += 1) {
     const char = css[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
     if (char === "{") {
       if (depth === 0) bodyStart = i + 1;
       depth += 1;
@@ -336,19 +438,284 @@ function extractTopLevelRules(css) {
       if (depth < 0) throw new Error("unbalanced braces");
     }
   }
+  if (quote) throw new Error("unterminated string");
   if (depth !== 0) throw new Error("unbalanced braces");
   const trailer = css.slice(preludeStart).trim();
   if (trailer) throw new Error(`content outside of any rule: "${trailer.slice(0, 60)}"`);
   return rules;
 }
 
-// Every selector in a theme's extra.css must scope itself to that theme:
-// the first compound of each selector must be html/:root carrying the
-// .dream-theme-<name> class. @media / @supports may wrap such rules.
-function validateExtraCssScope(css, themeName) {
+function stripCssComments(css) {
+  let result = "";
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < css.length; i += 1) {
+    const char = css[i];
+    const next = css[i + 1];
+    if (quote) {
+      result += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      result += char;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      const end = css.indexOf("*/", i + 2);
+      if (end === -1) throw new Error("unterminated comment");
+      result += " ";
+      i = end + 1;
+      continue;
+    }
+    result += char;
+  }
+  if (quote) throw new Error("unterminated string");
+  return result;
+}
+
+function splitCssTopLevel(value, delimiter) {
+  const parts = [];
+  let start = 0;
+  let quote = null;
+  let escaped = false;
+  let parentheses = 0;
+  let brackets = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === "(") parentheses += 1;
+    else if (char === ")") parentheses -= 1;
+    else if (char === "[") brackets += 1;
+    else if (char === "]") brackets -= 1;
+    else if (char === delimiter && parentheses === 0 && brackets === 0) {
+      parts.push(value.slice(start, i));
+      start = i + 1;
+    }
+    if (parentheses < 0 || brackets < 0) throw new Error("unbalanced CSS punctuation");
+  }
+  if (quote) throw new Error("unterminated string");
+  if (parentheses !== 0 || brackets !== 0) throw new Error("unbalanced CSS punctuation");
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function findCssTopLevelColon(value) {
+  let quote = null;
+  let escaped = false;
+  let parentheses = 0;
+  let brackets = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === "(") parentheses += 1;
+    else if (char === ")") parentheses -= 1;
+    else if (char === "[") brackets += 1;
+    else if (char === "]") brackets -= 1;
+    else if (char === ":" && parentheses === 0 && brackets === 0) return i;
+    if (parentheses < 0 || brackets < 0) throw new Error("unbalanced CSS punctuation");
+  }
+  return -1;
+}
+
+function parseCssDeclarations(body) {
+  const declarations = [];
+  for (const rawDeclaration of splitCssTopLevel(body, ";")) {
+    const declaration = rawDeclaration.trim();
+    if (!declaration) continue;
+    const colon = findCssTopLevelColon(declaration);
+    if (colon <= 0) throw new Error(`invalid declaration: "${declaration.slice(0, 60)}"`);
+    const property = declaration.slice(0, colon).trim().toLowerCase();
+    const value = declaration.slice(colon + 1).trim();
+    if (!/^--[-a-z0-9_]+$|^-?[a-z_][-a-z0-9_]*$/i.test(property) || !value) {
+      throw new Error(`invalid declaration: "${declaration.slice(0, 60)}"`);
+    }
+    declarations.push({ property, value });
+  }
+  return declarations;
+}
+
+const NATIVE_PAINT_PROPERTIES = new Set([
+  "accent-color",
+  "backdrop-filter",
+  "background",
+  "background-attachment",
+  "background-blend-mode",
+  "background-clip",
+  "background-color",
+  "background-image",
+  "background-origin",
+  "background-position",
+  "background-position-x",
+  "background-position-y",
+  "background-repeat",
+  "background-size",
+  "border-bottom-color",
+  "border-bottom-left-radius",
+  "border-bottom-right-radius",
+  "border-color",
+  "border-left-color",
+  "border-radius",
+  "border-right-color",
+  "border-top-color",
+  "border-top-left-radius",
+  "border-top-right-radius",
+  "box-shadow",
+  "caret-color",
+  "color",
+  "column-rule-color",
+  "fill",
+  "flood-color",
+  "lighting-color",
+  "outline-color",
+  "scrollbar-color",
+  "stop-color",
+  "stroke",
+  "text-decoration-color",
+  "text-emphasis-color",
+  "text-shadow",
+  "-webkit-backdrop-filter",
+  "-webkit-text-stroke-color",
+]);
+
+const NATIVE_FOREGROUND_PROPERTIES = new Set([
+  "caret-color",
+  "color",
+  "fill",
+  "flood-color",
+  "lighting-color",
+  "stop-color",
+  "stroke",
+  "text-decoration-color",
+  "text-emphasis-color",
+  "-webkit-text-stroke-color",
+]);
+
+const CRITICAL_VISIBLE_TOKENS = new Set([
+  "--dream-ink",
+  "--dream-hero-title-color",
+  "--dream-hero-subtitle-color",
+  "--dream-hero-chip-color",
+  "--dream-work-text",
+  "--dream-work-text-muted",
+  "--dream-work-code-text",
+]);
+
+function isObviouslyTransparent(value) {
+  const normalized = value.replace(/\s*!important\s*$/i, "").trim().toLowerCase();
+  if (normalized.includes("transparent")) return true;
+  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})0$/.test(normalized)) return true;
+  if (/^#(?:[0-9a-f]{4}|[0-9a-f]{8})$/.test(normalized)) {
+    return normalized.endsWith("0") && (normalized.length === 5 || normalized.endsWith("00"));
+  }
+  const alphaColor = normalized.match(/^(?:rgba|hsla)\([^)]*,\s*(0(?:\.0*)?|\.0+)\s*\)$/);
+  const modernAlphaColor = /\/\s*(?:0(?:\.0*)?|\.0+|0%)\s*\)$/.test(normalized);
+  return Boolean(alphaColor || modernAlphaColor);
+}
+
+function projectTopLevelSelector(selector) {
+  // Preserve only selector tokens that are outside functional pseudos and
+  // attributes. This lets the validator distinguish a positive first-compound
+  // class from text hidden inside :not/:is/:has or [attr="..."] values.
+  let visible = "";
+  let quote = null;
+  let escaped = false;
+  let parentheses = 0;
+  let brackets = 0;
+  for (const char of selector) {
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "(") { parentheses += 1; continue; }
+    if (char === ")") { parentheses -= 1; continue; }
+    if (char === "[") { brackets += 1; continue; }
+    if (char === "]") { brackets -= 1; continue; }
+    if (parentheses === 0 && brackets === 0) visible += char;
+  }
+  return visible;
+}
+
+function firstTopLevelCompound(selector) {
+  return projectTopLevelSelector(selector).trim().split(/[\s>+~]/, 1)[0];
+}
+
+function hasExactPositiveClassToken(compound, className) {
+  const escaped = className.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\.${escaped}(?=[.#:]|$)`).test(compound);
+}
+
+function isOwnedChromeSelector(selector) {
+  // Fail closed for the exact chrome ID anywhere in the selector, including
+  // ancestor/combinator and functional-pseudo forms. A false positive here only
+  // rejects extra.css; a false negative can recreate a full-shell overlay.
+  return /#codex-dream-skin-chrome(?![-_a-z0-9])/i.test(selector);
+}
+
+function isHomeCompositionSelector(selector) {
+  // THEME-SPEC section 5 documents a narrowly scoped .dream-home composition
+  // escape hatch. Ignore everything inside functional pseudos/attributes so
+  // :not(.dream-home.foo) cannot smuggle structural work CSS past the guard.
+  const visible = projectTopLevelSelector(selector);
+  return /(?:^|[\s>+~])\.dream-home(?:[.#:[\s>+~]|$)/.test(visible);
+}
+
+function hasDescendantUniversal(selector) {
+  let quote = null;
+  let escaped = false;
+  for (let i = 0; i < selector.length; i += 1) {
+    const char = selector[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") quote = char;
+    else if (char === "\\") {
+      // Selector escapes make a safety decision ambiguous (for example an
+      // escaped universal selector), so a native rule must fail closed.
+      return true;
+    } else if (char === "*" && selector[i + 1] !== "=") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isNativePaintProperty(property) {
+  return NATIVE_PAINT_PROPERTIES.has(property);
+}
+
+// Every selector in a theme's extra.css must scope itself to that theme. Rules
+// targeting native daily-work UI are paint-only: geometry, typography,
+// interaction, visibility, and motion stay owned by Codex. Theme CSS may not
+// target AutoSkin's chrome at all; optional moving characters go through the
+// bounded actor manifest. @media / @supports may wrap rules under the same checks.
+function validateExtraCssSafety(css, themeName) {
   const errors = [];
   const scopeClass = `.dream-theme-${themeName}`;
-  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const checkRules = (blockCss) => {
     for (const rule of extractTopLevelRules(blockCss)) {
       if (rule.prelude.startsWith("@")) {
@@ -356,16 +723,41 @@ function validateExtraCssScope(css, themeName) {
         else errors.push(`at-rule not allowed in theme extra.css: "${rule.prelude.slice(0, 60)}"`);
         continue;
       }
-      for (const selector of rule.prelude.split(",").map((part) => part.trim()).filter(Boolean)) {
-        const firstCompound = selector.split(/[\s>+~]/, 1)[0];
+      const selectors = splitCssTopLevel(rule.prelude, ",").map((part) => part.trim()).filter(Boolean);
+      if (!selectors.length) throw new Error("CSS rule has no selector");
+      const nativeWorkSelectors = [];
+      const ownedChromeSelectors = [];
+      for (const selector of selectors) {
+        const firstCompound = firstTopLevelCompound(selector);
         const anchored = firstCompound.startsWith("html.") || firstCompound.startsWith(":root.");
-        if (!anchored || !firstCompound.includes(scopeClass)) {
+        if (!anchored || !hasExactPositiveClassToken(firstCompound, scopeClass.slice(1))) {
           errors.push(`selector not scoped to ${scopeClass}: "${selector.slice(0, 80)}"`);
+          continue;
         }
+        const ownedChrome = isOwnedChromeSelector(selector);
+        if (!ownedChrome && hasDescendantUniversal(selector)) {
+          errors.push(`native selector may not use a universal descendant: "${selector.slice(0, 80)}"`);
+        }
+        if (ownedChrome) ownedChromeSelectors.push(selector);
+        else if (!isHomeCompositionSelector(selector)) nativeWorkSelectors.push(selector);
+      }
+      const declarations = parseCssDeclarations(rule.body);
+      if (nativeWorkSelectors.length) {
+        for (const { property, value } of declarations) {
+          if (!isNativePaintProperty(property)) {
+            errors.push(`native work selector may only use paint declarations; "${property}" is not allowed in "${nativeWorkSelectors[0].slice(0, 80)}"`);
+          } else if (NATIVE_FOREGROUND_PROPERTIES.has(property) && isObviouslyTransparent(value)) {
+            errors.push(`native work foreground may not be transparent; "${property}" is unsafe in "${nativeWorkSelectors[0].slice(0, 80)}"`);
+          }
+        }
+      }
+      if (ownedChromeSelectors.length) {
+        errors.push(`theme extra.css may not style AutoSkin chrome; use the bounded actor manifest: "${ownedChromeSelectors[0].slice(0, 80)}"`);
       }
     }
   };
   try {
+    const stripped = stripCssComments(css);
     checkRules(stripped);
   } catch (error) {
     errors.push(error.message);
@@ -389,8 +781,24 @@ function validateTokens(name, tokens) {
   for (const key of REQUIRED_TOKENS) {
     if (!(key in tokens)) errors.push(`theme "${name}": missing required token "${key}"`);
   }
+  for (const key of CRITICAL_VISIBLE_TOKENS) {
+    const value = tokens[key];
+    if (typeof value === "string" && isObviouslyTransparent(value)) {
+      errors.push(`theme "${name}": critical visible token "${key}" may not be transparent`);
+    }
+  }
+  const chatOpacity = tokens["--dream-chat-art-opacity"];
+  if (typeof chatOpacity === "string") {
+    const normalized = chatOpacity.trim();
+    const alpha = /^(?:0(?:\.\d+)?|\.\d+)$/.test(normalized) ? Number(normalized) : Number.NaN;
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 0.14) {
+      errors.push(`theme "${name}": token "--dream-chat-art-opacity" must be a plain number from 0 to 0.14`);
+    }
+  }
   return { errors };
 }
+
+export { validateExtraCssSafety, validateTokens, loadPayload, isSameFilePath };
 
 async function loadThemeDir(baseName, dirName) {
   const dir = path.join(root, baseName, dirName);
@@ -451,15 +859,29 @@ async function loadThemeDir(baseName, dirName) {
       return null;
     }
   }
+  const actor = normalizeActor(name, config.actor);
+  artUrls.actors = [];
+  if (actor) {
+    try {
+      for (const file of actor.files) {
+        const buffer = await fs.readFile(path.join(dir, file));
+        const mime = MIME_BY_EXT[path.extname(file).toLowerCase()] ?? "image/png";
+        artUrls.actors.push(`data:${mime};base64,${buffer.toString("base64")}`);
+      }
+    } catch {
+      warn(`theme "${name}": actor asset missing; actor disabled`);
+      artUrls.actors = [];
+    }
+  }
   let extraCss = null;
   try {
     extraCss = await fs.readFile(path.join(dir, "extra.css"), "utf8");
   } catch {}
   if (extraCss !== null) {
-    const scopeErrors = validateExtraCssScope(extraCss, name);
-    if (scopeErrors.length) {
-      for (const error of scopeErrors) warn(`theme "${name}" extra.css: ${error}`);
-      warn(`theme "${name}": extra.css REJECTED (kept out of the payload); fix the scoping and re-run`);
+    const cssErrors = validateExtraCssSafety(extraCss, name);
+    if (cssErrors.length) {
+      for (const error of cssErrors) warn(`theme "${name}" extra.css: ${error}`);
+      warn(`theme "${name}": extra.css REJECTED (kept out of the payload); fix scope/safety violations and re-run`);
       extraCss = null;
     }
   }
@@ -477,6 +899,14 @@ async function loadThemeDir(baseName, dirName) {
     // Derived decor tokens first so hand-written tokens of the same name win.
     tokens: { ...deriveDecorTokens(name, config), ...config.tokens },
     stickers: normalizeStickers(name, config.stickers),
+    actor: actor && artUrls.actors.length ? {
+      width: actor.width,
+      durationMs: actor.durationMs,
+      delayMs: actor.delayMs,
+      behaviors: actor.behaviors,
+      entries: actor.entries,
+      bounds: actor.bounds,
+    } : null,
     extraCss,
     artUrls,
   };
@@ -535,6 +965,7 @@ async function loadPayload() {
     order: themes.map((theme) => theme.name),
     meta: Object.fromEntries(themes.map((theme) => [theme.name, theme.meta])),
     stickers: Object.fromEntries(themes.map((theme) => [theme.name, theme.stickers])),
+    actors: Object.fromEntries(themes.map((theme) => [theme.name, theme.actor])),
     defaultTheme,
     defaultLayout: DEFAULT_LAYOUT,
   };
@@ -563,13 +994,16 @@ async function removeFromSession(session) {
       rootElement.style.removeProperty('--dream-home-art');
       rootElement.style.removeProperty('--dream-chat-art');
       for (const cls of [...rootElement.classList]) {
-        if (cls === 'codex-dream-skin' || cls.startsWith('dream-theme-') || cls.startsWith('dream-layout-')) {
+        if (cls === 'codex-dream-skin' || cls.startsWith('dream-theme-') || cls.startsWith('dream-layout-') || cls.startsWith('dream-route-')) {
           rootElement.classList.remove(cls);
         }
       }
     }
     document.querySelectorAll('.dream-home').forEach((node) => node.classList.remove('dream-home'));
     document.querySelectorAll('.dream-home-shell').forEach((node) => node.classList.remove('dream-home-shell'));
+    document.querySelectorAll('.dream-work-shell').forEach((node) => node.classList.remove('dream-work-shell'));
+    document.querySelectorAll('.dream-work-header').forEach((node) => node.classList.remove('dream-work-header'));
+    document.querySelectorAll('.dream-work-composer').forEach((node) => node.classList.remove('dream-work-composer'));
     document.querySelectorAll('.dream-new-task').forEach((node) => node.classList.remove('dream-new-task'));
     document.getElementById('codex-dream-skin-style')?.remove();
     document.getElementById('codex-dream-skin-chrome')?.remove();
@@ -711,7 +1145,7 @@ async function runOneShot(options) {
         if (options.mode !== "remove") await applyToSession(session, payload);
       }
       const verified = options.mode === "remove"
-        ? await session.evaluate("!document.documentElement.classList.contains('codex-dream-skin')")
+        ? await verifyAuxiliarySession(session)
         : (options.reload || options.mode === "once")
           ? await waitForVerifiedSession(session, options.timeoutMs)
           : await verifySession(session);
@@ -727,7 +1161,7 @@ async function runOneShot(options) {
     targets: results,
     auxiliaryTargets: auxiliaryResults,
   }, null, 2));
-  if (options.mode === "verify" && (
+  if ((options.mode === "verify" || options.mode === "remove") && (
     results.some((item) => !item.result.pass) || auxiliaryResults.some((item) => !item.result.pass)
   )) process.exitCode = 2;
 }
@@ -745,6 +1179,7 @@ async function runThemesReport() {
       button: theme.meta.button,
       extraCss: theme.extraCss !== null,
       stickers: theme.stickers ? Object.keys(theme.stickers) : [],
+      actor: theme.actor ? { ...theme.actor, assets: theme.artUrls.actors.length } : null,
     })),
   }, null, 2));
 }
@@ -815,7 +1250,13 @@ async function runWatch(options) {
   for (const session of sessions.values()) session.close();
 }
 
-const options = parseArgs(process.argv.slice(2));
-if (options.mode === "watch") await runWatch(options);
-else if (options.mode === "themes") await runThemesReport();
-else await runOneShot(options);
+const modulePath = fileURLToPath(import.meta.url);
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+const isEntryPoint = invokedPath && await isSameFilePath(invokedPath, modulePath);
+
+if (isEntryPoint) {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.mode === "watch") await runWatch(options);
+  else if (options.mode === "themes") await runThemesReport();
+  else await runOneShot(options);
+}

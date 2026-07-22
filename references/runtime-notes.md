@@ -20,5 +20,5 @@
 - Windows installs `Codex Dream Skin Watcher.lnk` in Startup. macOS installs `~/Library/LaunchAgents/com.codex-autoskin.watcher.plist`. The watcher does not launch Codex by itself; it only reacts when Codex is opened normally without the required debug port.
 - A newly loaded macOS LaunchAgent ignores an already-running unskinned Codex instance until that instance closes or is explicitly relaunched with CDP. Installation must never silently terminate the user's current work.
 - `watcher-state.json` records the watcher PID and `watcher.log` records recovery events. Windows uses a named mutex; macOS uses an atomic lock directory with stale-PID recovery.
-- If Codex is already running without the chosen debugging port, close it first or explicitly use `-RestartExisting`.
+- If Codex is already running without the chosen debugging port, the launcher leaves it untouched. Close it normally with **File > Exit**, then launch Dream Skin again.
 - App updates are supported because Windows queries `Get-AppxPackage OpenAI.Codex` on every launch and macOS re-reads the selected bundle's `Info.plist`.

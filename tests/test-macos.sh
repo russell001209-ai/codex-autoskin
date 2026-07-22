@@ -184,7 +184,7 @@ echo "Checking isolated one-command installation..."
 mkdir -p "$TEST_HOME/.codex"
 printf '%s\n' '[desktop]' 'appearanceTheme = "dark"' >"$TEST_HOME/.codex/config.toml"
 HOME="$TEST_HOME" "$ROOT/scripts/autoskin-macos.sh" install \
-  --no-start --no-auto-recover --port 19337 --app "$FAKE_APP" --node "$NODE_BIN" >/dev/null
+  --no-start --no-auto-recover --apply-legacy-base-theme --port 19337 --app "$FAKE_APP" --node "$NODE_BIN" >/dev/null
 INSTALLED_ROOT="$TEST_HOME/Library/Application Support/CodexDreamSkin"
 [ -x "$INSTALLED_ROOT/runtime/scripts/autoskin-macos.sh" ] || fail "unified installer did not create a stable runtime"
 [ -f "$INSTALLED_ROOT/config.before-dream-skin.toml" ] || fail "unified installer did not back up base colors"

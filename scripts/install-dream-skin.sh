@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 PORT="$(dream_installed_port)"
 NO_AUTO_RECOVER=0
+APPLY_LEGACY_BASE_THEME=0
 APP_PATH=""
 NODE_PATH=""
 
@@ -13,9 +14,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --port) [ "$#" -ge 2 ] || dream_die "--port requires a value"; PORT="$2"; shift 2 ;;
     --no-auto-recover) NO_AUTO_RECOVER=1; shift ;;
+    --apply-legacy-base-theme) APPLY_LEGACY_BASE_THEME=1; shift ;;
     --app) [ "$#" -ge 2 ] || dream_die "--app requires a value"; APP_PATH="$2"; shift 2 ;;
     --node) [ "$#" -ge 2 ] || dream_die "--node requires a value"; NODE_PATH="$2"; shift 2 ;;
-    -h|--help) echo "Usage: $0 [--port 9335] [--no-auto-recover] [--app /path/to/ChatGPT.app]"; exit 0 ;;
+    -h|--help) echo "Usage: $0 [--port 9335] [--no-auto-recover] [--apply-legacy-base-theme] [--app /path/to/ChatGPT.app]"; exit 0 ;;
     *) dream_die "unknown argument: $1" ;;
   esac
 done
@@ -54,8 +56,10 @@ fi
   --source "$SOURCE_ROOT" --destination "$RUNTIME_ROOT" >/dev/null
 RUNTIME_SCRIPTS="$RUNTIME_ROOT/scripts"
 
-"$NODE_BIN" "$RUNTIME_SCRIPTS/configure-base-theme.mjs" \
-  --config "$CONFIG_PATH" --backup "$BACKUP_PATH" --platform darwin
+if [ "$APPLY_LEGACY_BASE_THEME" -eq 1 ]; then
+  "$NODE_BIN" "$RUNTIME_SCRIPTS/configure-base-theme.mjs" \
+    --config "$CONFIG_PATH" --backup "$BACKUP_PATH" --platform darwin
+fi
 
 if [ "$NO_AUTO_RECOVER" -ne 1 ]; then
   "$NODE_BIN" "$RUNTIME_SCRIPTS/macos-launch-agent.mjs" \
@@ -83,5 +87,6 @@ fi
 ' "$INSTALL_STATE_PATH" "$PORT" "$APP_BUNDLE" "$NODE_BIN" "$RUNTIME_ROOT" "$SOURCE_ROOT"
 
 echo "Codex Dream Skin installed for macOS."
+echo "Your existing Codex appearance setting was preserved."
 echo "Installed runtime: $RUNTIME_ROOT"
 echo "Launch it with: $RUNTIME_SCRIPTS/autoskin-macos.sh start"

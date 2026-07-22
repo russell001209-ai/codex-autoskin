@@ -9,8 +9,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $SkillRoot = Split-Path -Parent $PSScriptRoot
 $Injector = Join-Path $PSScriptRoot 'injector.mjs'
+$Restore = Join-Path $PSScriptRoot 'restore-dream-skin.ps1'
 $StateRoot = Join-Path $env:LOCALAPPDATA 'CodexDreamSkin'
 $StatePath = Join-Path $StateRoot 'state.json'
+$WatcherStatePath = Join-Path $StateRoot 'watcher-state.json'
 $StdoutPath = Join-Path $StateRoot 'injector.log'
 $StderrPath = Join-Path $StateRoot 'injector-error.log'
 New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
@@ -27,46 +29,115 @@ function Test-CodexDebugPort([int]$CandidatePort) {
   return $false
 }
 
-function Stop-CodexCompletely {
-  $visible = @(Get-Process ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
-  foreach ($process in $visible) { [void]$process.CloseMainWindow() }
-  Start-Sleep -Seconds 2
-  $deadline = (Get-Date).AddSeconds(12)
-  while ((Get-Date) -lt $deadline) {
-    $procs = @(Get-Process ChatGPT -ErrorAction SilentlyContinue)
-    if ($procs.Count -eq 0) { break }
-    $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 300
+function Test-IsNoProcessFoundError([object]$ErrorRecord) {
+  if ($null -eq $ErrorRecord) { return $false }
+  $errorId = [string]$ErrorRecord.FullyQualifiedErrorId
+  return ($errorId -eq 'NoProcessFoundForGivenName' -or
+    $errorId.StartsWith('NoProcessFoundForGivenName,', [StringComparison]::Ordinal))
+}
+
+function Get-NamedProcessesFailClosed([string[]]$Names) {
+  $rows = @()
+  foreach ($name in $Names) {
+    try {
+      $rows += @(Get-Process -Name $name -ErrorAction Stop)
+    } catch {
+      if (Test-IsNoProcessFoundError $_) { continue }
+      throw "Could not enumerate process name '$name'; a safe cold start cannot be proven: $($_.Exception.Message)"
+    }
   }
-  # Windows can auto-respawn a force-killed app moments later; give it a beat and swat once more,
-  # otherwise the unflagged respawn wins the single-instance lock and the debug flag is silently lost.
-  Start-Sleep -Milliseconds 900
-  Get-Process ChatGPT -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  Start-Sleep -Milliseconds 300
+  return @($rows)
+}
+
+function Get-CodexPackageProcesses([string]$PackageInstallLocation) {
+  $installRoot = [IO.Path]::GetFullPath($PackageInstallLocation).TrimEnd('\')
+  $installBoundary = $installRoot + '\'
+  $rows = @()
+  foreach ($process in @(Get-NamedProcessesFailClosed @('ChatGPT', 'codex'))) {
+    try {
+      $candidatePath = [IO.Path]::GetFullPath($process.Path)
+      if ($candidatePath.StartsWith($installBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+        $rows += [pscustomobject]@{ Pid=[int]$process.Id; Path=$candidatePath; Disposition='exact-package' }
+      }
+    } catch {
+      $rows += [pscustomobject]@{ Pid=[int]$process.Id; Path=$null; Disposition='indeterminate-live' }
+    }
+  }
+  return @($rows)
 }
 
 $node = (Get-Command node -ErrorAction Stop).Source
 $debugReady = Test-CodexDebugPort $Port
-$mainProcesses = @(Get-Process ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+$installedPackage = Get-AppxPackage OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1
+if (-not $installedPackage) { throw 'The OpenAI.Codex Store package is not installed.' }
+$packageProcesses = @(Get-CodexPackageProcesses $installedPackage.InstallLocation)
 
-if (-not $debugReady -and -not $ProfilePath -and $mainProcesses.Count -gt 0) {
-  if (-not $RestartExisting) {
-    throw "Codex is already running without dream-skin debugging on port $Port. Close Codex or rerun with -RestartExisting."
+if (-not $debugReady -and $packageProcesses.Count -gt 0) {
+  if ($RestartExisting) {
+    throw "Safety guard: -RestartExisting no longer closes Codex. Keep the current tasks running, then use File > Exit before launching Dream Skin."
   }
-  Stop-CodexCompletely
+  throw "Codex package processes are already running without dream-skin debugging on port $Port. It was left untouched. Use File > Exit, then launch Dream Skin."
 }
 
 function Start-CodexWithDebugPort {
   $package = Get-AppxPackage OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1
   if (-not $package) { throw 'The OpenAI.Codex Store package is not installed.' }
-  $exe = Join-Path $package.InstallLocation 'app\ChatGPT.exe'
-  if (-not (Test-Path -LiteralPath $exe)) { throw "Codex executable not found: $exe" }
+  $existingAtActivation = @(Get-CodexPackageProcesses $package.InstallLocation)
+  if ($existingAtActivation.Count -gt 0) {
+    throw "Codex package state changed before themed activation; no launch was attempted: $($existingAtActivation.Pid -join ',')."
+  }
+  $appUserModelId = "$($package.PackageFamilyName)!App"
   $arguments = @("--remote-debugging-port=$Port")
   if ($ProfilePath) {
+    if ($ProfilePath.Contains('"')) { throw 'ProfilePath cannot contain a double quote.' }
     New-Item -ItemType Directory -Force -Path $ProfilePath | Out-Null
-    $arguments += "--user-data-dir=$ProfilePath"
+    $arguments += "--user-data-dir=`"$ProfilePath`""
   }
-  Start-Process -FilePath $exe -ArgumentList $arguments
+
+  if (-not ('CodexDreamSkin.PackagedApp' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace CodexDreamSkin {
+  [Flags]
+  public enum ActivateOptions {
+    None = 0x0,
+    DesignMode = 0x1,
+    NoErrorUI = 0x2,
+    NoSplashScreen = 0x4
+  }
+
+  [ComImport]
+  [Guid("2e941141-7f97-4756-ba1d-9decde894a3d")]
+  [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IApplicationActivationManager {
+    [PreserveSig]
+    int ActivateApplication(
+      [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+      [MarshalAs(UnmanagedType.LPWStr)] string arguments,
+      ActivateOptions options,
+      out uint processId);
+  }
+
+  [ComImport]
+  [Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
+  class ApplicationActivationManager {}
+
+  public static class PackagedApp {
+    public static uint Activate(string appUserModelId, string arguments) {
+      var manager = (IApplicationActivationManager)new ApplicationActivationManager();
+      uint processId;
+      int result = manager.ActivateApplication(appUserModelId, arguments, ActivateOptions.NoErrorUI, out processId);
+      if (result < 0) Marshal.ThrowExceptionForHR(result);
+      return processId;
+    }
+  }
+}
+'@
+  }
+
+  [void][CodexDreamSkin.PackagedApp]::Activate($appUserModelId, ($arguments -join ' '))
 }
 
 function Wait-CodexDebugPort([int]$Seconds) {
@@ -78,25 +149,19 @@ function Wait-CodexDebugPort([int]$Seconds) {
   return $true
 }
 
-$maxLaunchAttempts = if ($ProfilePath) { 1 } else { 2 }
 $attempt = 0
 while (-not (Test-CodexDebugPort $Port)) {
-  if ($attempt -ge $maxLaunchAttempts) {
+  if ($attempt -ge 1) {
     throw "Codex did not expose CDP on 127.0.0.1/[::1]:$Port after $attempt launch attempt(s)."
   }
   $attempt++
   Start-CodexWithDebugPort
   if (Wait-CodexDebugPort 30) { break }
-  if ($ProfilePath) { throw "Codex did not expose CDP on 127.0.0.1/[::1]:$Port within 30 seconds." }
-  # Likely lost the single-instance race to an unflagged auto-respawn; clear everything and retry once.
-  Stop-CodexCompletely
 }
 
-if (Test-Path -LiteralPath $StatePath) {
-  try {
-    $old = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
-    if ($old.injectorPid) { Stop-Process -Id ([int]$old.injectorPid) -Force -ErrorAction SilentlyContinue }
-  } catch {}
+if ((Test-Path -LiteralPath $StatePath) -or (Test-Path -LiteralPath $WatcherStatePath)) {
+  if (-not (Test-Path -LiteralPath $Restore -PathType Leaf)) { throw "Verified cleanup script is missing: $Restore" }
+  & $Restore -Port $Port
 }
 
 if ($ForegroundInjector) {

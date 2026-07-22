@@ -8,24 +8,51 @@ param(
 $ErrorActionPreference = 'Stop'
 $node = (Get-Command node -ErrorAction Stop).Source
 $injector = Join-Path $PSScriptRoot 'injector.mjs'
+$watcher = Join-Path $PSScriptRoot 'watch-dream-skin.ps1'
+$repoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot)).TrimEnd('\')
 $StateRoot = Join-Path $env:LOCALAPPDATA 'CodexDreamSkin'
 $StatePath = Join-Path $StateRoot 'state.json'
 $WatcherStatePath = Join-Path $StateRoot 'watcher-state.json'
 
+function Test-ExactPath([string]$Actual, [string]$Expected) {
+  if ([string]::IsNullOrWhiteSpace($Actual) -or [string]::IsNullOrWhiteSpace($Expected)) { return $false }
+  return [string]::Equals([IO.Path]::GetFullPath($Actual).TrimEnd('\'), [IO.Path]::GetFullPath($Expected).TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Stop-VerifiedSkinProcess([int]$ProcessId, [string]$ExpectedExecutable, [string]$ExpectedScript, [string]$Label) {
+  $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+  if (-not $process) { return }
+  if (-not (Test-ExactPath $process.Path $ExpectedExecutable)) {
+    throw "$Label PID $ProcessId executable mismatch; refusing to stop it."
+  }
+  $row = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+  if (-not $row -or [string]::IsNullOrWhiteSpace([string]$row.CommandLine) -or
+      $row.CommandLine.IndexOf($ExpectedScript, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+    throw "$Label PID $ProcessId command line does not identify the isolated AutoSkin script; refusing to stop it."
+  }
+  Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+}
+
 if (Test-Path -LiteralPath $WatcherStatePath) {
-  try {
-    $watcherState = Get-Content -LiteralPath $WatcherStatePath -Raw | ConvertFrom-Json
-    if ($watcherState.watcherPid) { Stop-Process -Id ([int]$watcherState.watcherPid) -Force -ErrorAction SilentlyContinue }
-  } catch {}
-  Remove-Item -LiteralPath $WatcherStatePath -Force -ErrorAction SilentlyContinue
+  $watcherState = Get-Content -LiteralPath $WatcherStatePath -Raw | ConvertFrom-Json
+  if (-not (Test-ExactPath $watcherState.scriptPath $watcher) -or [int]$watcherState.port -ne $Port) {
+    throw 'Watcher state does not belong to this isolated repo/port; refusing to trust its PID.'
+  }
+  if ($watcherState.watcherPid) {
+    Stop-VerifiedSkinProcess ([int]$watcherState.watcherPid) (Join-Path $PSHOME 'powershell.exe') $watcher 'Watcher'
+  }
+  Remove-Item -LiteralPath $WatcherStatePath -Force
 }
 
 if (Test-Path -LiteralPath $StatePath) {
-  try {
-    $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
-    if ($state.injectorPid) { Stop-Process -Id ([int]$state.injectorPid) -Force -ErrorAction SilentlyContinue }
-  } catch {}
-  Remove-Item -LiteralPath $StatePath -Force -ErrorAction SilentlyContinue
+  $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+  if (-not (Test-ExactPath $state.skillRoot $repoRoot) -or [int]$state.port -ne $Port) {
+    throw 'Injector state does not belong to this isolated repo/port; refusing to trust its PID.'
+  }
+  if ($state.injectorPid) {
+    Stop-VerifiedSkinProcess ([int]$state.injectorPid) $node $injector 'Injector'
+  }
+  Remove-Item -LiteralPath $StatePath -Force
 }
 Start-Sleep -Milliseconds 250
 try { & $node $injector --remove --port $Port --timeout-ms 3000 } catch {}

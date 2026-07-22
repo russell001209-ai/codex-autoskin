@@ -68,12 +68,20 @@ themes/<name>/            # 公开主题；本地私用放 themes-private/<name>
   "composer": {                 // 可选（v1.1）
     "placeholder": "输入你的想法…"   // 首页输入框占位文案；缺省保留 Codex 原生文案，
   },                            //   还原皮肤后自动恢复原生（走 CSS var 回退，无 DOM 改写）
+  "actor": {                    // 可选（v3.1）。日常任务页偶发经过的单实例角色
+    "assets": ["actor.png"],   //   1~4 张主题目录内 png/jpg/webp；每轮只取一张
+    "behaviors": ["run"],      //   与 assets 对齐：run / peek / rest
+    "entries": ["upper-left"], //   与 assets 对齐：四个受保护入口之一
+    "width": 88,               //   64~104 px；运行时不接受超大整窗角色
+    "durationMs": 2200,         //   1400~8000 ms；只动画 transform + opacity
+    "delayMs": 12000            //   2500~30000 ms；两轮之间保持安静
+  },                            //   引擎在四个入口轮转，碰到原生控件/正文/面板就放弃本轮
   "tokens": { ... }             // 必需：28 个 CSS 变量，见 §3。key 必须匹配 --dream-[a-z0-9-]+，
                                 //   value 是不含 { } ; 的字符串；缺任何一个必需 token 整个主题拒载
 }
 ```
 
-> v1.1/v1.2 的 `cards` / `stickers` / `composer` 三个字段完全向后兼容：老 theme.json 缺这些字段照常工作；
+> v1.1/v1.2/v3.1 的 `cards` / `stickers` / `composer` / `actor` 字段完全向后兼容：老 theme.json 缺这些字段照常工作；
 > 字段值非法只丢弃该字段并在 stderr 告警，不会连累整个主题。
 > 引擎内部把 `cards.subtitles`→`--dream-card-sub-1..4`、`cards.icons`→`--dream-card-icon-1..4` +
 > `--dream-card-native-icon-1..4`、`cards.opacity`→`--dream-card-alpha`、
@@ -301,6 +309,8 @@ banner 版式对 B 类图同样适用 B1（超大 H% 取特写横带）；hero �
   - 合法：`html.dream-theme-foo .x`、`html.dream-theme-foo.dream-layout-fullscreen .y > div`、`:root.codex-dream-skin.dream-theme-foo`
   - 非法：`body { }`、`.dream-home { }`、`main.main-surface { }`
 - at-rule 只允许 `@media` / `@supports`（内部同样逐条校验）。
+- 日常原生节点只允许不会改变几何/交互/可见性的 paint 属性；`opacity`、`filter`、`mix-blend-mode`、透明前景等会隐藏内容的写法拒载。
+- 主题 `extra.css` 不得选择 `#codex-dream-skin-chrome`（即使写了 `pointer-events:none` 也不行）；动态角色必须走受限 `actor` manifest。
 - 违规后果：**extra.css 整体拒载**（主题本体仍加载），注入器 stderr 打 `[dream-skin] theme "<name>" extra.css: ...` 告警。改好后重跑 start 脚本。
 - 装饰性内容必须 `pointer-events: none`，不得遮挡/替换任何真实 Codex 控件。
 
@@ -320,6 +330,7 @@ banner 版式对 B 类图同样适用 B1（超大 H% 取特写横带）；hero �
 6. 桌面宠物窗口（`initialRoute=/avatar-overlay` 辅助渲染器）保持全透明，不被注入。
 7. 配了 `cards.subtitles` 的主题：把窗口拖窄让原生卡从 4 → 3 → 2 张收缩，副标题随卡片一起消失、不错位。
 8. 配了 `stickers` 的主题：贴纸只出现在全屏版式首页（banner / 聊天页都不出现），且不遮压任何原生控件。
+9. 配了 `actor` 的主题：四入口均可到达、每轮 DOM 只有一个角色、与头部/正文/输入框/左右面板无碰撞；窄窗找不到通道时隐藏；`prefers-reduced-motion: reduce` 时不移动；结束与卸载后节点/timer/blob URL 均清干净。
 
 ## 8. 禁止事项
 

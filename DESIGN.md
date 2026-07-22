@@ -42,7 +42,7 @@
 ## Motion
 
 - **Approach:** Minimal-functional.
-- **Duration:** 140ms for hover/focus, no ambient motion in conversations.
+- **Duration:** 140ms for hover/focus. An opt-in work-route actor may make a rare 1.4–3.2s pass, one instance at a time, only through a collision-free edge corridor; no continuous ambient loop.
 - **Reduced motion:** Existing reduced-motion behavior remains authoritative.
 
 ## Daily Workspace Contract
@@ -56,3 +56,4 @@ Themes may set the optional `--dream-work-*` tokens documented in `THEME-SPEC.md
 | 2026-07-17 | Make the persistent task route the primary themed surface | It is where users spend nearly all of their time |
 | 2026-07-17 | Keep assistant output flat; raise only user prompts | Creates clear cadence without turning a long thread into a pile of cards |
 | 2026-07-17 | Use art as atmosphere, never as a competing content layer | Readability is the product requirement; character comes from repeated motifs and material |
+| 2026-07-21 | Bound moving character art in the renderer instead of theme CSS | Three checked entries, one owned node, transform/opacity only, fail closed on collision or reduced motion |

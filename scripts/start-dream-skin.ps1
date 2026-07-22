@@ -9,8 +9,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $SkillRoot = Split-Path -Parent $PSScriptRoot
 $Injector = Join-Path $PSScriptRoot 'injector.mjs'
+$Restore = Join-Path $PSScriptRoot 'restore-dream-skin.ps1'
 $StateRoot = Join-Path $env:LOCALAPPDATA 'CodexDreamSkin'
 $StatePath = Join-Path $StateRoot 'state.json'
+$WatcherStatePath = Join-Path $StateRoot 'watcher-state.json'
 $StdoutPath = Join-Path $StateRoot 'injector.log'
 $StderrPath = Join-Path $StateRoot 'injector-error.log'
 New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
@@ -27,20 +29,63 @@ function Test-CodexDebugPort([int]$CandidatePort) {
   return $false
 }
 
+function Test-IsNoProcessFoundError([object]$ErrorRecord) {
+  if ($null -eq $ErrorRecord) { return $false }
+  $errorId = [string]$ErrorRecord.FullyQualifiedErrorId
+  return ($errorId -eq 'NoProcessFoundForGivenName' -or
+    $errorId.StartsWith('NoProcessFoundForGivenName,', [StringComparison]::Ordinal))
+}
+
+function Get-NamedProcessesFailClosed([string[]]$Names) {
+  $rows = @()
+  foreach ($name in $Names) {
+    try {
+      $rows += @(Get-Process -Name $name -ErrorAction Stop)
+    } catch {
+      if (Test-IsNoProcessFoundError $_) { continue }
+      throw "Could not enumerate process name '$name'; a safe cold start cannot be proven: $($_.Exception.Message)"
+    }
+  }
+  return @($rows)
+}
+
+function Get-CodexPackageProcesses([string]$PackageInstallLocation) {
+  $installRoot = [IO.Path]::GetFullPath($PackageInstallLocation).TrimEnd('\')
+  $installBoundary = $installRoot + '\'
+  $rows = @()
+  foreach ($process in @(Get-NamedProcessesFailClosed @('ChatGPT', 'codex'))) {
+    try {
+      $candidatePath = [IO.Path]::GetFullPath($process.Path)
+      if ($candidatePath.StartsWith($installBoundary, [StringComparison]::OrdinalIgnoreCase)) {
+        $rows += [pscustomobject]@{ Pid=[int]$process.Id; Path=$candidatePath; Disposition='exact-package' }
+      }
+    } catch {
+      $rows += [pscustomobject]@{ Pid=[int]$process.Id; Path=$null; Disposition='indeterminate-live' }
+    }
+  }
+  return @($rows)
+}
+
 $node = (Get-Command node -ErrorAction Stop).Source
 $debugReady = Test-CodexDebugPort $Port
-$mainProcesses = @(Get-Process ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+$installedPackage = Get-AppxPackage OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1
+if (-not $installedPackage) { throw 'The OpenAI.Codex Store package is not installed.' }
+$packageProcesses = @(Get-CodexPackageProcesses $installedPackage.InstallLocation)
 
-if (-not $debugReady -and $mainProcesses.Count -gt 0) {
+if (-not $debugReady -and $packageProcesses.Count -gt 0) {
   if ($RestartExisting) {
-    throw "Safety guard: -RestartExisting no longer closes Codex. Keep the current tasks running, then close Codex yourself when convenient before launching Dream Skin."
+    throw "Safety guard: -RestartExisting no longer closes Codex. Keep the current tasks running, then use File > Exit before launching Dream Skin."
   }
-  throw "Codex is already running without dream-skin debugging on port $Port. It was left untouched. Close Codex yourself when convenient, then launch Dream Skin."
+  throw "Codex package processes are already running without dream-skin debugging on port $Port. It was left untouched. Use File > Exit, then launch Dream Skin."
 }
 
 function Start-CodexWithDebugPort {
   $package = Get-AppxPackage OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1
   if (-not $package) { throw 'The OpenAI.Codex Store package is not installed.' }
+  $existingAtActivation = @(Get-CodexPackageProcesses $package.InstallLocation)
+  if ($existingAtActivation.Count -gt 0) {
+    throw "Codex package state changed before themed activation; no launch was attempted: $($existingAtActivation.Pid -join ',')."
+  }
   $appUserModelId = "$($package.PackageFamilyName)!App"
   $arguments = @("--remote-debugging-port=$Port")
   if ($ProfilePath) {
@@ -114,11 +159,9 @@ while (-not (Test-CodexDebugPort $Port)) {
   if (Wait-CodexDebugPort 30) { break }
 }
 
-if (Test-Path -LiteralPath $StatePath) {
-  try {
-    $old = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
-    if ($old.injectorPid) { Stop-Process -Id ([int]$old.injectorPid) -Force -ErrorAction SilentlyContinue }
-  } catch {}
+if ((Test-Path -LiteralPath $StatePath) -or (Test-Path -LiteralPath $WatcherStatePath)) {
+  if (-not (Test-Path -LiteralPath $Restore -PathType Leaf)) { throw "Verified cleanup script is missing: $Restore" }
+  & $Restore -Port $Port
 }
 
 if ($ForegroundInjector) {

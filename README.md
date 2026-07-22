@@ -18,6 +18,8 @@
 
 ---
 
+> 本仓库是 [Finderchangchang/codex-autoskin](https://github.com/Finderchangchang/codex-autoskin) 的实验性 fork，新增日常任务界面材质系统与单实例动态角色能力；MIT 许可与原作者署名完整保留。
+
 ## 🎬 真实演示
 
 把仓库链接和一张图丢给你的 Codex，说一句 **"安装这个皮肤"**：
@@ -41,7 +43,7 @@ Codex 自己克隆、安装、从图里生成主题：
 把下面这句话发给你的 Codex，顺手附一张你喜欢的图（横向、主体靠右、无文字水印）：
 
 ```text
-安装这个 Codex 皮肤引擎：https://github.com/Finderchangchang/codex-autoskin ，装好后用我附的这张图生成一个主题并立即应用
+安装这个 Codex 皮肤引擎：https://github.com/russell001209-ai/codex-autoskin ，装好后用我附的这张图生成一个主题并立即应用
 ```
 
 剩下的全自动。没附图也行——它会先带着内置主题亮起来，之后随时补图。不想用 AI？往下看各平台的手动版。
@@ -70,6 +72,7 @@ Codex 自己克隆、安装、从图里生成主题：
 - ⚡ **上手极简** — Windows 两条命令；macOS 双击安装，直接复用 Codex 内置的 Node.js，普通用户零依赖
 - 📁 **主题即文件夹** — 一个 `theme.json` + 一张图就是一个主题，增删主题零改码
 - 🧭 **日常工作态换肤** — 不只美化新建任务页；聊天阅读、任务导航、右侧输出/来源面板、代码块和输入区共享一套可配置材质系统
+- 🎭 **单实例动态角色** — 主题可配置 1–4 张角色图轮流从安全边缘出现；每次最多一只，避开正文、输入框与左右面板，减少动态效果时自动降级为静态角色
 - 🤖 **AI 精修（可选）** — 把仓库丢给你的 Codex / Claude，照 [THEME-SPEC.md](THEME-SPEC.md) 深度定制裁剪、文案、贴纸
 - 🔒 **安全可逆** — CDP 仅本机回环注入，不碰 `WindowsApps`、应用 bundle 或 `app.asar`，登录态会话原样保留，一条命令还原
 - 🛡 **稳定守护** — 双栈端口探测、崩溃防抖熔断、装饰层命中测试；Windows 用 Startup watcher、macOS 用 LaunchAgent，重启 Codex 后皮肤自动恢复
@@ -80,8 +83,10 @@ Codex 自己克隆、安装、从图里生成主题：
 
 前提：Windows 10/11、Microsoft Store 版 Codex（打开并登录过一次）、[Node.js ≥ 20](https://nodejs.org/zh-cn)。
 
+首次安装前请先在 Codex 中选择 **文件 → 退出**。安装器不会自动关闭或重启正在运行的 Codex，避免打断长任务。
+
 ```powershell
-git clone https://github.com/Finderchangchang/codex-autoskin.git   # 或 Download ZIP 解压
+git clone https://github.com/russell001209-ai/codex-autoskin.git   # 或 Download ZIP 解压
 cd codex-autoskin
 
 .\quickstart.ps1                             # ① 安装并启动，Codex 带内置主题亮起
@@ -252,15 +257,17 @@ A skin engine for the Windows & macOS Codex desktop apps. Injects CSS/JS into th
 **Fastest path** — paste this to your Codex along with an image you like:
 
 ```text
-Install this Codex skin engine: https://github.com/Finderchangchang/codex-autoskin , then use the attached image to generate a theme and apply it
+Install this Codex skin engine: https://github.com/russell001209-ai/codex-autoskin , then use the attached image to generate a theme and apply it
 ```
 
 **Manual quick start**
 
 Windows (Store Codex signed in once, [Node.js ≥ 20](https://nodejs.org/)):
 
+Before the first install, choose **File → Exit** in Codex. The installer never closes or restarts an active Codex process, so long-running tasks are not interrupted.
+
 ```powershell
-git clone https://github.com/Finderchangchang/codex-autoskin.git
+git clone https://github.com/russell001209-ai/codex-autoskin.git
 cd codex-autoskin
 .\quickstart.ps1                            # install & launch with a bundled theme
 .\quick-theme.ps1 -Image C:\path\your.png   # your image becomes a live theme
@@ -268,7 +275,7 @@ cd codex-autoskin
 
 macOS (official Codex app signed in once — no separate Node.js needed, the app's bundled runtime is reused): download/unzip, right-click → Open `Install AutoSkin on macOS.command`, then open `Create AutoSkin Theme on macOS.command` and pick a PNG/JPG. Terminal equivalents: `scripts/autoskin-macos.sh install` and `scripts/autoskin-macos.sh quick-theme /path/to/image.png --name my-theme`. Installation keeps the existing Codex profile (projects, tasks, chats, login all preserved) and copies a self-contained runtime to `~/Library/Application Support/CodexDreamSkin/runtime`; the unified command also supports `theme`, `verify`, `doctor`, and repeatable `uninstall`. If Gatekeeper blocks a script, right-click → Open; grant Screen Recording for screenshot verification.
 
-**Features**: one-image theme generation (auto palette, light/dark route detection) · themes are plain folders (`theme.json` + one image) · optional AI refinement — hand this repo to your Codex/Claude agent with "refine theme &lt;name&gt; following THEME-SPEC.md" · switch via `node scripts/set-theme.mjs <theme> [banner|fullscreen]` · uninstall via `scripts\restore-dream-skin.ps1 -Uninstall -RestoreBaseTheme` (Windows) or `scripts/autoskin-macos.sh uninstall` (macOS).
+**Features**: one-image theme generation (auto palette, light/dark route detection) · themes are plain folders (`theme.json` + one image) · optional single-instance actor rotation with 1–4 images and collision-safe edge placement · optional AI refinement — hand this repo to your Codex/Claude agent with "refine theme &lt;name&gt; following THEME-SPEC.md" · switch via `node scripts/set-theme.mjs <theme> [banner|fullscreen]` · uninstall via `scripts\restore-dream-skin.ps1 -Uninstall -RestoreBaseTheme` (Windows) or `scripts/autoskin-macos.sh uninstall` (macOS).
 
 Image tips: PNG/JPG, landscape ≥ 1600 px, subject on the right (the left side carries the title), clean art without text/watermark/UI. You are responsible for the rights to images you use; never publish themes using a real person's likeness (keep private themes in git-ignored `themes-private/`).
 

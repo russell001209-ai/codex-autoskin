@@ -9,7 +9,7 @@
   const INJECTION_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const LAYOUT_STORAGE_KEY = "codex-dream-skin.layout";
   const THEME_STORAGE_KEY = "codex-dream-skin.theme";
-  const STYLE_VERSION = "5";
+  const STYLE_VERSION = "6";
   const LAYOUTS = new Set(["banner", "fullscreen"]);
   // Sidebar "new task" row gets a marker class so the structure CSS can restyle
   // it as a capsule. Text matching only; the real button stays fully native.
@@ -20,14 +20,26 @@
   const THEMES = new Set(THEME_ORDER);
   const THEME_META = manifest.meta;
   const THEME_STICKERS = manifest.stickers ?? {};
+  const THEME_ACTORS = manifest.actors ?? {};
   const DEFAULT_THEME = THEMES.has(manifest.defaultTheme) ? manifest.defaultTheme : THEME_ORDER[0];
   const DEFAULT_LAYOUT = LAYOUTS.has(manifest.defaultLayout) ? manifest.defaultLayout : "fullscreen";
   window.__CODEX_DREAM_SKIN_DISABLED__ = false;
 
   const previous = window[STATE_KEY];
   if (previous?.observer) previous.observer.disconnect();
+  if (previous?.resizeObserver) previous.resizeObserver.disconnect();
+  if (previous?.onWindowResize) window.removeEventListener("resize", previous.onWindowResize);
+  if (previous?.onDocumentScroll) document.removeEventListener("scroll", previous.onDocumentScroll, true);
+  if (previous?.motionQuery && previous?.onMotionPreferenceChange) {
+    previous.motionQuery.removeEventListener?.("change", previous.onMotionPreferenceChange);
+  }
   if (previous?.timer) clearInterval(previous.timer);
   if (previous?.scheduler?.timeout) clearTimeout(previous.scheduler.timeout);
+  if (previous?.scheduler?.geometryTimeout) clearTimeout(previous.scheduler.geometryTimeout);
+  if (previous?.scheduler?.actorTimeout) clearTimeout(previous.scheduler.actorTimeout);
+  if (previous?.scheduler?.actorSafetyTimeout) clearTimeout(previous.scheduler.actorSafetyTimeout);
+  if (previous?.scheduler?.actorScrollTimeout) clearTimeout(previous.scheduler.actorScrollTimeout);
+  try { previous?.actorAnimation?.cancel(); } catch {}
   const createObjectUrl = (dataUrl) => {
     const comma = dataUrl.indexOf(",");
     const mime = dataUrl.slice(5, dataUrl.indexOf(";")) || "image/png";
@@ -40,8 +52,12 @@
   // from a previous injection are only reused when the fingerprints still match,
   // so replacing a theme's art file takes effect on live re-injection without a
   // renderer reload (stale blobs are revoked below).
-  const artSignature = (assets) =>
-    `${assets.home.length}:${assets.home.slice(-24)}|${assets.chat.length}:${assets.chat.slice(-24)}`;
+  const artSignature = (assets) => {
+    const actorSignature = (assets.actors ?? [])
+      .map((asset) => `${asset.length}:${asset.slice(-24)}`)
+      .join("|");
+    return `${assets.home.length}:${assets.home.slice(-24)}|${assets.chat.length}:${assets.chat.slice(-24)}|${actorSignature}`;
+  };
   const artSigs = Object.fromEntries(
     Object.entries(artAssets).map(([theme, assets]) => [theme, artSignature(assets)])
   );
@@ -51,16 +67,19 @@
     Object.entries(artAssets).map(([theme, assets]) => [theme, {
       home: createObjectUrl(assets.home),
       chat: assets.chat === assets.home ? null : createObjectUrl(assets.chat),
+      actors: (assets.actors ?? []).map(createObjectUrl),
     }])
   );
   if (!previousUrlsUsable && previous?.artUrls) {
     for (const assets of Object.values(previous.artUrls)) {
       if (assets.home) URL.revokeObjectURL(assets.home);
       if (assets.chat && assets.chat !== assets.home) URL.revokeObjectURL(assets.chat);
+      for (const actor of assets.actors ?? []) URL.revokeObjectURL(actor);
     }
   }
   for (const assets of Object.values(artUrls)) {
     if (!assets.chat) assets.chat = assets.home;
+    if (!Array.isArray(assets.actors)) assets.actors = [];
   }
   const existingStyle = document.getElementById(STYLE_ID);
   if (existingStyle) {
@@ -122,7 +141,9 @@
   };
 
   const applyTheme = (theme, persist = true) => {
-    activeTheme = THEMES.has(theme) ? theme : DEFAULT_THEME;
+    const nextTheme = THEMES.has(theme) ? theme : DEFAULT_THEME;
+    const themeChanged = nextTheme !== activeTheme;
+    activeTheme = nextTheme;
     const root = document.documentElement;
     if (root) {
       // Strip every dream-theme-* class (including stale ones from an older
@@ -140,13 +161,723 @@
       try { localStorage.setItem(THEME_STORAGE_KEY, activeTheme); } catch {}
     }
     syncThemeMeta();
+    if (themeChanged) {
+      stopActor();
+      actorThemeKey = "";
+      syncActor(activeRoute);
+    }
+  };
+
+  function detectRoute(documentRoot) {
+    try {
+      const shellMains = [...documentRoot.querySelectorAll("main.main-surface")];
+      if (shellMains.length !== 1) return { kind: "unknown", shellMain: null, home: null };
+
+      const shellMain = shellMains[0];
+      const routeMains = [];
+      if (typeof shellMain.matches === "function" && shellMain.matches('[role="main"]')) {
+        routeMains.push(shellMain);
+      }
+      routeMains.push(...shellMain.querySelectorAll('[role="main"]'));
+      const homeCandidates = routeMains.filter((candidate) =>
+        Boolean(candidate.querySelector?.('[data-testid="home-icon"]'))
+      );
+      if (homeCandidates.length === 1) {
+        return { kind: "home", shellMain, home: homeCandidates[0] };
+      }
+      if (homeCandidates.length > 1) {
+        return { kind: "unknown", shellMain: null, home: null };
+      }
+
+      const hasMessage = Boolean(shellMain.querySelector('[data-message-author-role]'));
+      const hasTaskHeader = Boolean(shellMain.querySelector("header.app-header-tint"));
+      const hasComposer = Boolean(shellMain.querySelector(".composer-surface-chrome"));
+      if ((hasMessage && (hasTaskHeader || hasComposer)) || (hasTaskHeader && hasComposer)) {
+        return { kind: "work", shellMain, home: null };
+      }
+    } catch {
+      // Codex DOM revisions must degrade to the untouched native UI, never to a
+      // guessed work surface.
+    }
+    return { kind: "unknown", shellMain: null, home: null };
+  }
+
+  function applyRouteMarkers(root, documentRoot, route) {
+    root.classList.remove("codex-dream-skin", "dream-route-home", "dream-route-work");
+    documentRoot.querySelectorAll(".dream-home").forEach((node) => node.classList.remove("dream-home"));
+    documentRoot.querySelectorAll(".dream-home-shell").forEach((node) => node.classList.remove("dream-home-shell"));
+    documentRoot.querySelectorAll(".dream-work-shell").forEach((node) => node.classList.remove("dream-work-shell"));
+    documentRoot.querySelectorAll(".dream-work-header").forEach((node) => node.classList.remove("dream-work-header"));
+    documentRoot.querySelectorAll(".dream-work-composer").forEach((node) => node.classList.remove("dream-work-composer"));
+
+    if (route.kind === "unknown" || !route.shellMain) return;
+    root.classList.add("codex-dream-skin", `dream-route-${route.kind}`);
+    if (route.kind === "home" && route.home) {
+      route.home.classList.add("dream-home");
+      route.shellMain.classList.add("dream-home-shell");
+      return;
+    }
+    if (route.kind === "work") {
+      route.shellMain.classList.add("dream-work-shell");
+      route.shellMain.querySelectorAll("header.app-header-tint").forEach((header) => {
+        header.classList.add("dream-work-header");
+      });
+      route.shellMain.querySelectorAll(".composer-surface-chrome").forEach((composer) => {
+        composer.classList.add("dream-work-composer");
+      });
+    }
+  }
+
+  function getSafeRect(element, viewport) {
+    if (!element || element.isConnected === false || typeof element.getBoundingClientRect !== "function") return null;
+    const rect = element.getBoundingClientRect();
+    const left = Number(rect.left);
+    const top = Number(rect.top);
+    const width = Number(rect.width);
+    const height = Number(rect.height);
+    const viewportWidth = Number(viewport?.innerWidth);
+    const viewportHeight = Number(viewport?.innerHeight);
+    if (![left, top, width, height, viewportWidth, viewportHeight].every(Number.isFinite)) return null;
+    if (width <= 0 || height <= 0 || viewportWidth <= 0 || viewportHeight <= 0) return null;
+    const right = left + width;
+    const bottom = top + height;
+    const tolerance = 2;
+    if (left < -tolerance || top < -tolerance || right > viewportWidth + tolerance || bottom > viewportHeight + tolerance) {
+      return null;
+    }
+    return { left, top, width, height, right, bottom };
+  }
+
+  function rectsOverlap(a, b) {
+    return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  }
+
+  function getActorVisualBounds(path, progress, behavior = "run", visibleBounds = [0, 0, 1, 1]) {
+    const amount = Math.min(1, Math.max(0, Number(progress) || 0));
+    const interpolate = (start, end, localProgress) => start + (end - start) * localProgress;
+    let x = path.toX;
+    const isRunner = behavior === "run";
+    if (isRunner && amount <= .14) x = interpolate(path.fromX, path.enterX, amount / .14);
+    else if (isRunner && amount <= .26) x = interpolate(path.enterX, path.toX, (amount - .14) / .12);
+    else if (isRunner && amount >= .86) x = interpolate(path.toX, path.exitX, (amount - .86) / .14);
+    const box = Array.isArray(visibleBounds) && visibleBounds.length === 4 && visibleBounds.every(Number.isFinite)
+      ? visibleBounds
+      : [0, 0, 1, 1];
+    const scale = 1.03;
+    const originX = path.size * .5;
+    const originY = path.size * .72;
+    const scaledX = (localX) => x + originX + (localX - originX) * scale;
+    const scaledY = (localY) => path.y + originY + (localY - originY) * scale;
+    let left = scaledX(path.size * box[0]);
+    let right = scaledX(path.size * box[2]);
+    let top = scaledY(path.size * box[1]);
+    let bottom = scaledY(path.size * box[3]);
+    if (isRunner && path.side === "left") {
+      left = Math.min(left, scaledX(path.size * .26 - 38));
+      top = Math.min(top, scaledY(path.size * .59));
+      bottom = Math.max(bottom, scaledY(path.size * .59 + 7));
+    } else if (isRunner) {
+      right = Math.max(right, scaledX(path.size * .74 + 38));
+      top = Math.min(top, scaledY(path.size * .59));
+      bottom = Math.max(bottom, scaledY(path.size * .59 + 7));
+    }
+    return {
+      left,
+      top,
+      right,
+      bottom,
+    };
+  }
+
+  function getActorSweptBounds(path, behavior = "run", visibleBounds = [0, 0, 1, 1]) {
+    const frames = [0, .14, .26, .72, .86, 1].map((progress) =>
+      getActorVisualBounds(path, progress, behavior, visibleBounds)
+    );
+    return {
+      left: Math.min(...frames.map((frame) => frame.left)) - 10,
+      top: Math.min(...frames.map((frame) => frame.top)) - 13,
+      right: Math.max(...frames.map((frame) => frame.right)) + 10,
+      bottom: Math.max(...frames.map((frame) => frame.bottom)) + 10,
+    };
+  }
+
+  // Return one short emergence route that stays clear of every known native
+  // landmark. All coordinates are local to the observed main surface. Right
+  // entries may step inward and emerge beside an expanded output/source panel;
+  // this preserves the pose's named entrance instead of silently turning it
+  // into one of the left-side poses.
+  function findSafeActorPath(shellBox, protectedRects, actorWidth, preferredEntry = 0, behavior = "run", avoidPoints = [], visibleBounds = [0, 0, 1, 1]) {
+    const width = Number(shellBox?.width);
+    const height = Number(shellBox?.height);
+    const size = Number(actorWidth);
+    if (![width, height, size].every(Number.isFinite) || width < 420 || height < 360 || size < 1) return null;
+
+    const entries = [
+      { id: "upper-left", side: "left", position: .14 },
+      { id: "upper-right", side: "right", position: .12 },
+      { id: "middle-left", side: "left", position: .50 },
+      { id: "lower-right", side: "right", position: .88 },
+    ];
+    const safeRects = Array.isArray(protectedRects) ? protectedRects.filter((rect) =>
+      rect && [rect.left, rect.top, rect.right, rect.bottom].every(Number.isFinite)
+    ) : [];
+    const safeAvoidPoints = Array.isArray(avoidPoints) ? avoidPoints.filter((point) =>
+      point && Number.isFinite(point.x) && Number.isFinite(point.y)
+    ) : [];
+    const entryIndex = ((Number(preferredEntry) || 0) % entries.length + entries.length) % entries.length;
+    const entry = entries[entryIndex];
+    const minY = 68;
+    const maxY = height - size - 126;
+    if (maxY < minY) return null;
+    const minX = 14;
+    const maxX = width - size - 28;
+    if (maxX < minX) return null;
+    // Start from the pose's semantic quadrant, then search the full safe canvas
+    // in small increments. Dense threads may have no actor-sized opening in the exact
+    // quadrant; nearest-safe placement preserves four distinct roles without
+    // covering copy or silently changing the named entrance.
+    const targetX = width * ([.18, .70, .32, .68][entryIndex] ?? .5);
+    const targetY = minY + (maxY - minY) * entry.position;
+    const xValues = [];
+    const yValues = [];
+    for (let x = minX; x <= maxX; x += 14) xValues.push(x);
+    for (let y = minY; y <= maxY; y += 14) yValues.push(y);
+    xValues.push(Math.round(Math.min(maxX, Math.max(minX, targetX))));
+    yValues.push(Math.round(Math.min(maxY, Math.max(minY, targetY))));
+    const placements = [];
+    for (const toX of new Set(xValues)) {
+      for (const y of new Set(yValues)) {
+        placements.push({
+          toX,
+          y,
+          distance: (toX - targetX) ** 2 + (y - targetY) ** 2,
+        });
+      }
+    }
+    placements.sort((left, right) => left.distance - right.distance ||
+      (entry.side === "left" ? left.toX - right.toX : right.toX - left.toX) || left.y - right.y);
+    const travel = Math.min(42, Math.max(28, Math.round(width * .04)));
+    for (const placement of placements) {
+      const { toX, y } = placement;
+      const isRunner = behavior === "run";
+      const enterX = isRunner ? toX + (entry.side === "left" ? -travel : travel) : toX;
+      const fromX = isRunner ? enterX + (entry.side === "left" ? -18 : 18) : toX;
+      const exitX = toX;
+      const box = Array.isArray(visibleBounds) && visibleBounds.length === 4 && visibleBounds.every(Number.isFinite)
+        ? visibleBounds
+        : [0, 0, 1, 1];
+      const point = {
+        x: toX + size * (box[0] + box[2]) / 2,
+        y: y + size * (box[1] + box[3]) / 2,
+      };
+      // A whole four-pose cycle should read as four separate entrances, not as
+      // one actor swapping costumes in roughly the same spot. Keep at least
+      // 1.2 actor widths between remembered dwell points. That is visibly
+      // separate while still leaving four valid slots on dense task pages.
+      const minCycleSeparation = Math.max(96, size * 1.2);
+      if (safeAvoidPoints.some((previous) =>
+        Math.hypot(point.x - previous.x, point.y - previous.y) < minCycleSeparation
+      )) continue;
+      const candidate = {
+        entry: entry.id,
+        entryIndex,
+        side: entry.side,
+        fromX,
+        enterX,
+        toX,
+        exitX,
+        y,
+        size,
+        anchorX: point.x,
+        anchorY: point.y,
+      };
+      const corridor = getActorSweptBounds(candidate, behavior, box);
+      if (corridor.left < 0 || corridor.top < 0 || corridor.right > width - 22 || corridor.bottom > height) continue;
+      if (safeRects.some((rect) => rectsOverlap(corridor, rect))) continue;
+      return { ...candidate, corridor };
+    }
+    return null;
+  }
+
+  function buildActorKeyframes(path, behavior = "run") {
+    const settleTransform = `translate3d(${path.toX}px, ${path.y}px, 0) scale(1)`;
+    if (behavior !== "run") {
+      const emergeY = behavior === "rest" ? path.y + 2 : path.y + 5;
+      return [
+        {
+          transform: `translate3d(${path.toX}px, ${emergeY}px, 0) scale(.94)`,
+          opacity: 0,
+          offset: 0,
+          easing: "cubic-bezier(.23,1,.32,1)",
+        },
+        {
+          transform: `translate3d(${path.toX}px, ${path.y}px, 0) scale(1.03)`,
+          opacity: 1,
+          offset: .14,
+          easing: "cubic-bezier(.77,0,.175,1)",
+        },
+        { transform: settleTransform, opacity: 1, offset: .26, easing: "cubic-bezier(.77,0,.175,1)" },
+        {
+          transform: `translate3d(${path.toX}px, ${path.y - 3}px, 0) scale(1.01)`,
+          opacity: 1,
+          offset: .72,
+          easing: "cubic-bezier(.77,0,.175,1)",
+        },
+        { transform: settleTransform, opacity: 1, offset: .86, easing: "cubic-bezier(.23,1,.32,1)" },
+        {
+          transform: `translate3d(${path.toX}px, ${path.y + 2}px, 0) scale(.97)`,
+          opacity: 0,
+          offset: 1,
+        },
+      ];
+    }
+    return [
+      {
+        transform: `translate3d(${path.fromX}px, ${path.y}px, 0) scale(.94)`,
+        opacity: 0,
+        offset: 0,
+        easing: "cubic-bezier(.23,1,.32,1)",
+      },
+      {
+        transform: `translate3d(${path.enterX}px, ${path.y}px, 0) scale(1.03)`,
+        opacity: 1,
+        offset: .14,
+        easing: "cubic-bezier(.77,0,.175,1)",
+      },
+      { transform: settleTransform, opacity: 1, offset: .26, easing: "cubic-bezier(.77,0,.175,1)" },
+      {
+        transform: `translate3d(${path.toX}px, ${path.y - 3}px, 0) scale(1.01)`,
+        opacity: 1,
+        offset: .72,
+        easing: "cubic-bezier(.77,0,.175,1)",
+      },
+      { transform: settleTransform, opacity: 1, offset: .86, easing: "cubic-bezier(.23,1,.32,1)" },
+      {
+        transform: `translate3d(${path.exitX}px, ${path.y}px, 0) scale(.96)`,
+        opacity: 0,
+        offset: 1,
+      },
+    ];
+  }
+
+  function collectActorProtectedRects(documentRoot, shellBox, shellMain) {
+    const selector = [
+      "header.app-header-tint",
+      ".composer-surface-chrome",
+      "[data-message-author-role]",
+      "article p", "article li", "article pre", "article table", "article details",
+      "article h1", "article h2", "article h3", "article h4",
+      "button", "a", "input", "textarea", "select",
+      "[role=button]", "[role=dialog]", "[role=complementary]", "[role=menu]", "[role=menuitem]",
+      "[class*='thread-floating-content-top-inset']",
+      "[class~=bg-token-sidebar-surface-primary]", "[class~=bg-token-sidebar-surface-secondary]",
+    ].join(",");
+    const protectedRects = [];
+    const seen = new Set();
+    let nodes = [];
+    try { nodes = [...documentRoot.querySelectorAll(selector)]; } catch { return []; }
+    for (const node of nodes) {
+      if (seen.has(node) || node.closest?.(`#${CHROME_ID}`)) continue;
+      seen.add(node);
+      if (node.isConnected === false || typeof node.getBoundingClientRect !== "function") continue;
+      const rect = node.getBoundingClientRect();
+      const values = [rect.left, rect.top, rect.right, rect.bottom, rect.width, rect.height].map(Number);
+      if (!values.every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) continue;
+      const left = Math.max(0, rect.left - shellBox.left - 10);
+      const top = Math.max(0, rect.top - shellBox.top - 10);
+      const right = Math.min(shellBox.width, rect.right - shellBox.left + 10);
+      const bottom = Math.min(shellBox.height, rect.bottom - shellBox.top + 10);
+      if (right <= 0 || bottom <= 0 || left >= shellBox.width || top >= shellBox.height) continue;
+      protectedRects.push({ left, top, right, bottom });
+    }
+    // Codex sometimes renders commentary/status copy as bare text nodes inside
+    // layout divs, without article or message-role markers. Protect the actual
+    // painted line boxes so a static pose never sits on top of readable text.
+    if (shellMain && typeof documentRoot.createTreeWalker === "function" && typeof documentRoot.createRange === "function") {
+      const showText = documentRoot.defaultView?.NodeFilter?.SHOW_TEXT ?? 4;
+      const walker = documentRoot.createTreeWalker(shellMain, showText);
+      let textNode = null;
+      let visitedTextNodes = 0;
+      let protectedTextLines = 0;
+      while ((textNode = walker.nextNode()) && visitedTextNodes < 1200 && protectedTextLines < 500) {
+        visitedTextNodes += 1;
+        if (!textNode.nodeValue?.trim() || textNode.parentElement?.closest?.(`#${CHROME_ID}`)) continue;
+        const range = documentRoot.createRange();
+        range.selectNodeContents(textNode);
+        for (const rect of range.getClientRects()) {
+          if (protectedTextLines >= 500) break;
+          if (rect.width < 1 || rect.height < 1) continue;
+          const left = Math.max(0, rect.left - shellBox.left - 8);
+          const top = Math.max(0, rect.top - shellBox.top - 6);
+          const right = Math.min(shellBox.width, rect.right - shellBox.left + 8);
+          const bottom = Math.min(shellBox.height, rect.bottom - shellBox.top + 6);
+          if (right <= 0 || bottom <= 0 || left >= shellBox.width || top >= shellBox.height) continue;
+          protectedRects.push({ left, top, right, bottom });
+          protectedTextLines += 1;
+        }
+        range.detach?.();
+      }
+    }
+    // Never occupy the native scrollbar strip even when Chromium does not
+    // expose it as an element.
+    protectedRects.push({ left: Math.max(0, shellBox.width - 22), top: 0, right: shellBox.width, bottom: shellBox.height });
+    return protectedRects;
+  }
+
+  function hideChrome(chrome) {
+    if (!chrome) return;
+    chrome.hidden = true;
+    chrome.dataset.dreamSafeArea = "false";
+    chrome.dataset.dreamRoute = "unknown";
+    chrome.classList.remove("dream-home-shell", "dream-work-chrome");
+    chrome.style.setProperty("display", "none", "important");
+    chrome.style.removeProperty("--dream-composer-top");
+  }
+
+  const scheduler = {
+    timeout: null,
+    geometryTimeout: null,
+    actorTimeout: null,
+    actorSafetyTimeout: null,
+    actorScrollTimeout: null,
+  };
+  let activeRoute = { kind: "unknown", shellMain: null, home: null };
+  let observedShellMain = null;
+  let observedComposer = null;
+  let actorAnimation = null;
+  let activeActorPath = null;
+  let actorRunToken = 0;
+  let nextActorEntry = 0;
+  let nextActorAsset = 0;
+  let recentActorPoints = [];
+  let actorThemeKey = "";
+  const motionQuery = typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)")
+    : null;
+
+  function clearActorNode() {
+    activeActorPath = null;
+    const actor = document.getElementById(CHROME_ID)?.querySelector(".dream-theme-actor");
+    if (!actor) return;
+    actor.hidden = true;
+    actor.dataset.active = "false";
+    actor.dataset.side = "";
+    actor.dataset.entry = "";
+    actor.dataset.motion = "";
+    actor.dataset.assetIndex = "";
+    actor.dataset.static = "false";
+    actor.style.removeProperty("width");
+    actor.style.removeProperty("height");
+    actor.style.removeProperty("transform");
+    actor.style.removeProperty("opacity");
+  }
+
+  function stopActor(clearSchedule = true) {
+    actorRunToken += 1;
+    if (clearSchedule && scheduler.actorTimeout) {
+      clearTimeout(scheduler.actorTimeout);
+      scheduler.actorTimeout = null;
+    }
+    if (actorAnimation) {
+      actorAnimation.onfinish = null;
+      actorAnimation.oncancel = null;
+      try { actorAnimation.cancel(); } catch {}
+      actorAnimation = null;
+    }
+    clearActorNode();
+  }
+
+  function getActiveActor() {
+    const config = THEME_ACTORS[activeTheme];
+    const assets = artUrls[activeTheme]?.actors ?? [];
+    if (!config || !assets.length) return null;
+    return { config, assets };
+  }
+
+  function scheduleActor(delayOverride) {
+    const activeActor = getActiveActor();
+    if (scheduler.actorTimeout || actorAnimation || !activeActor || activeRoute.kind !== "work" || motionQuery?.matches) return;
+    const delay = Number.isFinite(delayOverride) ? delayOverride : activeActor.config.delayMs;
+    scheduler.actorTimeout = setTimeout(runActor, Math.max(800, delay));
+  }
+
+  function runActor() {
+    scheduler.actorTimeout = null;
+    const activeActor = getActiveActor();
+    if (!activeActor || motionQuery?.matches || activeRoute.kind !== "work" || !activeRoute.shellMain) {
+      stopActor(false);
+      return;
+    }
+    const currentRoute = detectRoute(document);
+    if (currentRoute.kind !== "work" || currentRoute.shellMain !== activeRoute.shellMain || !syncChromeGeometry()) {
+      stopActor(false);
+      return;
+    }
+    const shellBox = getSafeRect(activeRoute.shellMain, window);
+    const chrome = document.getElementById(CHROME_ID);
+    const actor = chrome?.querySelector(".dream-theme-actor");
+    const image = actor?.querySelector("img");
+    if (!shellBox || !actor || !image) {
+      stopActor(false);
+      return;
+    }
+    const { config, assets } = activeActor;
+    const assetIndex = nextActorAsset % assets.length;
+    if (assetIndex === 0) recentActorPoints = [];
+    const entryOrder = ["upper-left", "upper-right", "middle-left", "lower-right"];
+    const behavior = config.behaviors?.[assetIndex] ?? "run";
+    const preferredEntryName = config.entries?.[assetIndex];
+    const configuredEntry = entryOrder.indexOf(preferredEntryName);
+    const preferredEntry = configuredEntry >= 0 ? configuredEntry : nextActorEntry;
+    const protectedRects = collectActorProtectedRects(document, shellBox, activeRoute.shellMain);
+    const path = findSafeActorPath(
+      shellBox,
+      protectedRects,
+      config.width,
+      preferredEntry,
+      behavior,
+      recentActorPoints,
+      config.bounds?.[assetIndex],
+    );
+    if (!path) {
+      clearActorNode();
+      nextActorAsset = (nextActorAsset + 1) % assets.length;
+      scheduleActor(config.delayMs);
+      return;
+    }
+
+    const asset = assets[assetIndex];
+    nextActorAsset = (nextActorAsset + 1) % assets.length;
+    nextActorEntry = (path.entryIndex + 1) % 4;
+    recentActorPoints.push({ x: path.anchorX, y: path.anchorY });
+    if (recentActorPoints.length > assets.length) recentActorPoints.shift();
+    const token = ++actorRunToken;
+    activeActorPath = path;
+    actor.style.width = `${path.size}px`;
+    actor.style.height = `${path.size}px`;
+    actor.dataset.active = "true";
+    actor.dataset.side = path.side;
+    actor.dataset.entry = path.entry;
+    actor.dataset.motion = behavior;
+    actor.dataset.assetIndex = String(assetIndex);
+    actor.dataset.static = "false";
+    if (image.getAttribute("src") !== asset) image.src = asset;
+    actor.hidden = false;
+
+    actorAnimation = actor.animate(buildActorKeyframes(path, behavior), {
+      duration: config.durationMs,
+      fill: "forwards",
+    });
+    actorAnimation.onfinish = () => {
+      if (token !== actorRunToken) return;
+      actorAnimation = null;
+      clearActorNode();
+      scheduleActor(config.delayMs);
+    };
+    actorAnimation.oncancel = () => {
+      if (token !== actorRunToken) return;
+      actorAnimation = null;
+      clearActorNode();
+    };
+  }
+
+  function actorPathStillSafe() {
+    if (!activeActorPath || activeRoute.kind !== "work" || !activeRoute.shellMain) return false;
+    const currentRoute = detectRoute(document);
+    if (currentRoute.kind !== "work" || currentRoute.shellMain !== activeRoute.shellMain) return false;
+    const shellBox = getSafeRect(activeRoute.shellMain, window);
+    if (!shellBox) return false;
+    const protectedRects = collectActorProtectedRects(document, shellBox, activeRoute.shellMain);
+    return !protectedRects.some((rect) => rectsOverlap(activeActorPath.corridor, rect));
+  }
+
+  function showStaticActor() {
+    const activeActor = getActiveActor();
+    if (!activeActor || !motionQuery?.matches || activeRoute.kind !== "work" || !activeRoute.shellMain) return false;
+    const chrome = document.getElementById(CHROME_ID);
+    const actor = chrome?.querySelector(".dream-theme-actor");
+    const image = actor?.querySelector("img");
+    if (activeActorPath && actor?.dataset.static === "true" && actorPathStillSafe()) return true;
+    const shellBox = getSafeRect(activeRoute.shellMain, window);
+    if (!shellBox || !actor || !image) return false;
+    const assetIndex = nextActorAsset % activeActor.assets.length;
+    const entryOrder = ["upper-left", "upper-right", "middle-left", "lower-right"];
+    const configuredEntry = entryOrder.indexOf(activeActor.config.entries?.[assetIndex]);
+    const path = findSafeActorPath(
+      shellBox,
+      collectActorProtectedRects(document, shellBox, activeRoute.shellMain),
+      activeActor.config.width,
+      configuredEntry >= 0 ? configuredEntry : nextActorEntry,
+      "rest",
+      [],
+      activeActor.config.bounds?.[assetIndex],
+    );
+    if (!path) {
+      clearActorNode();
+      return false;
+    }
+    const asset = activeActor.assets[assetIndex];
+    activeActorPath = path;
+    actor.style.width = `${path.size}px`;
+    actor.style.height = `${path.size}px`;
+    actor.style.transform = `translate3d(${path.toX}px, ${path.y}px, 0) scale(1)`;
+    actor.style.opacity = "1";
+    actor.dataset.active = "true";
+    actor.dataset.side = path.side;
+    actor.dataset.entry = path.entry;
+    actor.dataset.motion = "static";
+    actor.dataset.assetIndex = String(assetIndex);
+    actor.dataset.static = "true";
+    if (image.getAttribute("src") !== asset) image.src = asset;
+    actor.hidden = false;
+    return true;
+  }
+
+  const scheduleActorSafetyCheck = () => {
+    if (scheduler.actorSafetyTimeout) return;
+    scheduler.actorSafetyTimeout = setTimeout(() => {
+      scheduler.actorSafetyTimeout = null;
+      if (activeActorPath && !actorPathStillSafe()) {
+        const staticMode = Boolean(motionQuery?.matches);
+        stopActor(false);
+        if (staticMode) showStaticActor();
+        else scheduleActor();
+      }
+    }, 90);
+  };
+
+  const onDocumentScroll = () => {
+    const staticMode = Boolean(motionQuery?.matches);
+    stopActor();
+    if (scheduler.actorScrollTimeout) clearTimeout(scheduler.actorScrollTimeout);
+    scheduler.actorScrollTimeout = setTimeout(() => {
+      scheduler.actorScrollTimeout = null;
+      if (staticMode) showStaticActor();
+      else scheduleActor();
+    }, 180);
+  };
+  document.addEventListener("scroll", onDocumentScroll, true);
+
+  function syncActor(route) {
+    const nextThemeKey = `${activeTheme}:${route.kind}`;
+    let routeOrThemeChanged = false;
+    if (actorThemeKey !== nextThemeKey) {
+      stopActor();
+      recentActorPoints = [];
+      actorThemeKey = nextThemeKey;
+      routeOrThemeChanged = true;
+    }
+    if (route.kind !== "work" || !getActiveActor()) {
+      stopActor();
+      return;
+    }
+    if (motionQuery?.matches) {
+      showStaticActor();
+      return;
+    }
+    if (routeOrThemeChanged) scheduleActor(1800);
+    else scheduleActor();
+  }
+
+  const onMotionPreferenceChange = () => {
+    stopActor();
+    if (motionQuery?.matches) showStaticActor();
+    else scheduleActor(1200);
+  };
+  motionQuery?.addEventListener?.("change", onMotionPreferenceChange);
+
+  const syncChromeGeometry = () => {
+    const chrome = document.getElementById(CHROME_ID);
+    if (!chrome || activeRoute.kind === "unknown" || !activeRoute.shellMain) {
+      stopActor();
+      hideChrome(chrome);
+      return false;
+    }
+
+    const currentRoute = detectRoute(document);
+    const routeChanged = currentRoute.kind !== activeRoute.kind ||
+      currentRoute.shellMain !== activeRoute.shellMain || currentRoute.home !== activeRoute.home;
+    if (routeChanged) {
+      stopActor();
+      hideChrome(chrome);
+      return false;
+    }
+
+    const shellBox = getSafeRect(activeRoute.shellMain, window);
+    if (!shellBox) {
+      stopActor();
+      hideChrome(chrome);
+      return false;
+    }
+
+    chrome.style.left = `${Math.round(shellBox.left)}px`;
+    chrome.style.top = `${Math.round(shellBox.top)}px`;
+    chrome.style.width = `${Math.round(shellBox.width)}px`;
+    chrome.style.height = `${Math.round(shellBox.height)}px`;
+    const composer = activeRoute.kind === "home"
+      ? activeRoute.home?.querySelector(".composer-surface-chrome")
+      : null;
+    if (composer) {
+      const composerBox = getSafeRect(composer, window);
+      if (!composerBox) {
+        stopActor();
+        hideChrome(chrome);
+        return false;
+      }
+      chrome.style.setProperty("--dream-composer-top", `${Math.round(composerBox.top - shellBox.top)}px`);
+    } else {
+      chrome.style.removeProperty("--dream-composer-top");
+    }
+    chrome.classList.toggle("dream-home-shell", activeRoute.kind === "home");
+    chrome.classList.toggle("dream-work-chrome", activeRoute.kind === "work");
+    chrome.hidden = false;
+    chrome.dataset.dreamSafeArea = "true";
+    chrome.dataset.dreamRoute = activeRoute.kind;
+    chrome.style.removeProperty("display");
+    return true;
+  };
+
+  const scheduleChromeGeometrySync = () => {
+    if (scheduler.geometryTimeout) clearTimeout(scheduler.geometryTimeout);
+    scheduler.geometryTimeout = setTimeout(() => {
+      scheduler.geometryTimeout = null;
+      stopActor();
+      if (syncChromeGeometry()) syncActor(activeRoute);
+    }, 0);
+  };
+  const resizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(scheduleChromeGeometrySync)
+    : null;
+  const onWindowResize = scheduleChromeGeometrySync;
+  window.addEventListener("resize", onWindowResize);
+
+  const bindChromeResizeTargets = (route) => {
+    const composer = route.kind === "home"
+      ? route.home?.querySelector(".composer-surface-chrome") ?? null
+      : route.kind === "work"
+        ? route.shellMain?.querySelector(".composer-surface-chrome") ?? null
+        : null;
+    if (observedShellMain === route.shellMain && observedComposer === composer) return;
+    resizeObserver?.disconnect();
+    observedShellMain = route.shellMain;
+    observedComposer = composer;
+    if (!resizeObserver || route.kind === "unknown" || !route.shellMain) return;
+    try {
+      resizeObserver.observe(route.shellMain);
+      if (composer) resizeObserver.observe(composer);
+    } catch {
+      resizeObserver.disconnect();
+      observedShellMain = null;
+      observedComposer = null;
+      stopActor();
+      hideChrome(document.getElementById(CHROME_ID));
+    }
   };
 
   const ensure = () => {
     if (window.__CODEX_DREAM_SKIN_DISABLED__) return;
     const root = document.documentElement;
     if (!root) return;
-    root.classList.add("codex-dream-skin");
     applyLayout(activeLayout, false);
     applyTheme(activeTheme, false);
 
@@ -174,27 +905,26 @@
       }
     }
 
-    const shellMain = document.querySelector("main.main-surface") || document.querySelector("main");
-    const home = document.querySelector('[role="main"]:has([data-testid="home-icon"])');
-    for (const candidate of document.querySelectorAll('[role="main"].dream-home')) {
-      if (candidate !== home) candidate.classList.remove("dream-home");
-    }
-    if (home) home.classList.add("dream-home");
-
-    if (!shellMain || !document.body) return;
-    shellMain.classList.toggle("dream-home-shell", Boolean(home));
-    shellMain.classList.toggle("dream-work-shell", !home);
-    root.classList.toggle("dream-route-home", Boolean(home));
-    root.classList.toggle("dream-route-work", !home);
-    shellMain.querySelectorAll("header.app-header-tint").forEach((header) => {
-      header.classList.toggle("dream-work-header", !home);
-    });
-    document.querySelectorAll(".composer-surface-chrome").forEach((composer) => {
-      composer.classList.toggle("dream-work-composer", !composer.closest(".dream-home"));
-    });
+    const route = document.body
+      ? detectRoute(document)
+      : { kind: "unknown", shellMain: null, home: null };
+    activeRoute = route;
+    // All injected structure + theme extra.css live in this one style node.
+    // Disable the sheet completely while the route is unknown so even a broad
+    // theme-specific selector cannot leak into a native Codex screen.
+    style.media = route.kind === "unknown" ? "not all" : "";
+    applyRouteMarkers(root, document, route);
     document.getElementById(LEGACY_CONTROLS_ID)?.remove();
+    if (route.kind === "unknown") {
+      bindChromeResizeTargets(route);
+      stopActor();
+      hideChrome(document.getElementById(CHROME_ID));
+      return;
+    }
+
     let chrome = document.getElementById(CHROME_ID);
     if (!chrome || chrome.parentElement !== document.body || chrome.dataset.dreamInjection !== INJECTION_ID) {
+      stopActor();
       chrome?.remove();
       chrome = document.createElement("div");
       chrome.id = CHROME_ID;
@@ -236,24 +966,17 @@
               <circle cx="76" cy="120" r="2.2"/><circle cx="96" cy="150" r="1.8"/><circle cx="120" cy="176" r="2.2"/><circle cx="180" cy="128" r="1.8"/>
             </g>
           </svg>
-        </div>`;
+        </div>
+        <div class="dream-theme-actor" data-active="false" aria-hidden="true" hidden><img alt="" draggable="false"></div>`;
       document.body.appendChild(chrome);
     }
 
     syncThemeMeta();
-    const shellBox = shellMain.getBoundingClientRect();
-    chrome.style.left = `${Math.round(shellBox.left)}px`;
-    chrome.style.top = `${Math.round(shellBox.top)}px`;
-    chrome.style.width = `${Math.round(shellBox.width)}px`;
-    chrome.style.height = `${Math.round(shellBox.height)}px`;
-    const composer = home?.querySelector(".composer-surface-chrome");
-    if (composer) {
-      const composerBox = composer.getBoundingClientRect();
-      chrome.style.setProperty("--dream-composer-top", `${Math.round(composerBox.top - shellBox.top)}px`);
-    } else {
-      chrome.style.removeProperty("--dream-composer-top");
-    }
-    chrome.classList.toggle("dream-home-shell", Boolean(home));
+    chrome.classList.toggle("dream-home-shell", route.kind === "home");
+    chrome.classList.toggle("dream-work-chrome", route.kind === "work");
+    chrome.dataset.dreamRoute = route.kind;
+    bindChromeResizeTargets(route);
+    if (syncChromeGeometry()) syncActor(route);
   };
 
   const cleanup = () => {
@@ -280,22 +1003,47 @@
     document.getElementById(LEGACY_CONTROLS_ID)?.remove();
     const state = window[STATE_KEY];
     state?.observer?.disconnect();
+    state?.resizeObserver?.disconnect();
+    if (state?.onWindowResize) window.removeEventListener("resize", state.onWindowResize);
+    if (state?.onDocumentScroll) document.removeEventListener("scroll", state.onDocumentScroll, true);
+    if (state?.motionQuery && state?.onMotionPreferenceChange) {
+      state.motionQuery.removeEventListener?.("change", state.onMotionPreferenceChange);
+    }
     if (state?.timer) clearInterval(state.timer);
     if (state?.scheduler?.timeout) clearTimeout(state.scheduler.timeout);
+    if (state?.scheduler?.geometryTimeout) clearTimeout(state.scheduler.geometryTimeout);
+    if (state?.scheduler?.actorTimeout) clearTimeout(state.scheduler.actorTimeout);
+    if (state?.scheduler?.actorSafetyTimeout) clearTimeout(state.scheduler.actorSafetyTimeout);
+    if (state?.scheduler?.actorScrollTimeout) clearTimeout(state.scheduler.actorScrollTimeout);
+    if (state?.actorAnimation) {
+      state.actorAnimation.onfinish = null;
+      state.actorAnimation.oncancel = null;
+      try { state.actorAnimation.cancel(); } catch {}
+    }
     for (const assets of Object.values(state?.artUrls || {})) {
       if (assets.home) URL.revokeObjectURL(assets.home);
       if (assets.chat && assets.chat !== assets.home) URL.revokeObjectURL(assets.chat);
+      for (const actor of assets.actors ?? []) URL.revokeObjectURL(actor);
     }
     delete window[STATE_KEY];
     return true;
   };
 
-  const scheduler = { timeout: null };
   const scheduleEnsure = () => {
+    // Ordinary streaming/content mutations must not erase an in-flight actor.
+    // Geometry changes are handled separately by ResizeObserver, which cancels
+    // and recalculates the safe corridor before the next decorative pass.
+    scheduleActorSafetyCheck();
     if (scheduler.timeout) clearTimeout(scheduler.timeout);
     scheduler.timeout = setTimeout(() => {
       scheduler.timeout = null;
       ensure();
+      if (activeActorPath && !actorPathStillSafe()) {
+        const staticMode = Boolean(motionQuery?.matches);
+        stopActor(false);
+        if (staticMode) showStaticActor();
+        else scheduleActor();
+      }
     }, 180);
   };
   const observer = new MutationObserver(scheduleEnsure);
@@ -305,8 +1053,14 @@
     ensure,
     cleanup,
     observer,
+    resizeObserver,
+    onWindowResize,
+    onDocumentScroll,
     timer,
     scheduler,
+    motionQuery,
+    onMotionPreferenceChange,
+    get actorAnimation() { return actorAnimation; },
     artUrls,
     artSigs,
     themes: [...THEME_ORDER],
@@ -316,8 +1070,9 @@
     setLayout: applyLayout,
     get theme() { return activeTheme; },
     setTheme: applyTheme,
-    version: "3.0.0"
+    get route() { return activeRoute.kind; },
+    version: "3.1.0"
   };
   ensure();
-  return { installed: true, version: "3.0.0", layout: activeLayout, theme: activeTheme, themes: [...THEME_ORDER] };
+  return { installed: true, version: "3.1.0", layout: activeLayout, theme: activeTheme, themes: [...THEME_ORDER] };
 })(__DREAM_CSS_JSON__, __DREAM_ART_ASSETS_JSON__, __DREAM_MANIFEST_JSON__)

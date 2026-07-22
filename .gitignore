@@ -1,6 +1,13 @@
 # Local-only themes (personal / likeness-sensitive art) — never publish
 themes-private/
 
+# Local verification captures can contain task names, chat text, and account UI
+docs/previews/
+run-*/
+.codex/
+*.tmp
+*.lnk
+
 # Runtime state lives in %LOCALAPPDATA%\CodexDreamSkin, but guard against strays
 *.log
 state.json

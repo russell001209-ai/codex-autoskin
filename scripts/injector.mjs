@@ -5,6 +5,20 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 
+async function isSameFilePath(first, second, platform = process.platform) {
+  const canonicalize = async (value) => {
+    try {
+      return await fs.realpath(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  const [left, right] = await Promise.all([canonicalize(first), canonicalize(second)]);
+  return platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
 function parseArgs(argv) {
   const options = { port: 9335, mode: "watch", timeoutMs: 30000, screenshot: null, reload: false };
   for (let i = 0; i < argv.length; i += 1) {
@@ -784,7 +798,7 @@ function validateTokens(name, tokens) {
   return { errors };
 }
 
-export { validateExtraCssSafety, validateTokens, loadPayload };
+export { validateExtraCssSafety, validateTokens, loadPayload, isSameFilePath };
 
 async function loadThemeDir(baseName, dirName) {
   const dir = path.join(root, baseName, dirName);
@@ -1238,9 +1252,7 @@ async function runWatch(options) {
 
 const modulePath = fileURLToPath(import.meta.url);
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
-const isEntryPoint = invokedPath && (process.platform === "win32"
-  ? invokedPath.toLowerCase() === modulePath.toLowerCase()
-  : invokedPath === modulePath);
+const isEntryPoint = invokedPath && await isSameFilePath(invokedPath, modulePath);
 
 if (isEntryPoint) {
   const options = parseArgs(process.argv.slice(2));

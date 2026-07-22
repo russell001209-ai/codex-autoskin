@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 import { validateExtraCssSafety, validateTokens } from "../scripts/injector.mjs";
 
 const themeName = "actor-safety-fixture";
+const injectorSource = await readFile(new URL("../scripts/injector.mjs", import.meta.url), "utf8");
+
+assert.match(injectorSource, /fs\.realpath\(value\)/, "entry-point detection must canonicalize macOS /var and /private/var aliases");
+assert.doesNotMatch(injectorSource, /invokedPath\s*===\s*modulePath/, "entry-point detection must not compare unresolved macOS paths directly");
 
 // Critical patterns from an intentionally unsafe live-theme fixture: native geometry changes,
 // descendant wildcards that recolor unknown controls, generated content on a

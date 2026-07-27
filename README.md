@@ -34,6 +34,14 @@ Codex 自己克隆、安装、从图里生成主题：
 
 ![③ 成品亮起](docs/demo-step3-result.png)
 
+### 日常工作态：换的不只是首页
+
+下面的脱敏重建画面保留了完整 Codex 结构：任务侧栏、聊天区、输入框和输出面板都使用同一套主题材质。四个动态角色按顺序轮换，每次最多出现一只。
+
+![Codex 日常工作态与单实例动态角色](docs/demo/codex-usagi-theme.gif)
+
+> 这张 GIF 仅作同人效果演示。角色与商标素材不随仓库分发；仓库只提供通用换肤和安全轮换引擎。
+
 > 演示主题由一张同人图经本流程生成，仅作流程演示；示例素材版权归原权利人。请勿用他人肖像或受版权保护的素材制作并**公开传播**主题（自用请放 `themes-private/`）。
 
 > 📌 **本项目只做第一步。** 大家都有 Codex，缺的只是"把一张图变成能用的皮肤底子"（背景 + 配色 + 全屏/横幅两版式）——这一步我们做到极简。至于边框、贴纸、卡片这些细节怎么玩，开动你的脑洞，让你的 agent 照 [THEME-SPEC.md](THEME-SPEC.md) 帮你实现。后续会陆续出教程。
@@ -253,6 +261,12 @@ Windows（Store 版 Codex）与 macOS（官方桌面客户端）。Linux 暂未�
 **Send one image — your Codex gets its own skin.**
 
 A skin engine for the Windows & macOS Codex desktop apps. Injects CSS/JS into the official renderer over Chrome DevTools Protocol (loopback only): no app files modified, fully reversible, login/session untouched.
+
+**Daily workspace demo** — the sanitized reconstruction below keeps the full Codex layout visible while the sidebar, chat, composer, and output panel share one material system. Four actor variants rotate one at a time.
+
+![Codex daily workspace with a single rotating actor](docs/demo/codex-usagi-theme.gif)
+
+> Fan-art demonstration only. Character and trademark assets are not distributed with the repository; the public project contains only the generic theming and collision-safe rotation engine.
 
 **Fastest path** — paste this to your Codex along with an image you like:
 
